@@ -297,8 +297,15 @@ t;
   - 'box.error.INVALID_XLOG_NAME : 75'
   - 'box.error.CREATE_FUNCTION : 50'
   - 'box.error.UNKNOWN_UPDATE_OP : 28'
+<<<<<<< c087608ccff1c489d957d76d079f179ea4377dcb
   - 'box.error.COMPRESSION : 119'
   - 'box.error.KEY_PART_IS_TOO_LONG : 118'
+||||||| merged common ancestors
+  - 'box.error.injection : table: <address>
+=======
+  - 'box.error.injection : table: <address>
+  - 'box.error.LOCAL_SERVER_UUID_IS_RO : 118'
+>>>>>>> Assign LSN in WAL and remove global struct recovery
   - 'box.error.CONNECTION_TO_SELF : 117'
   - 'box.error.NO_SUCH_INDEX : 35'
   - 'box.error.UNKNOWN_RTREE_INDEX_DISTANCE_TYPE : 103'

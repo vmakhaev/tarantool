@@ -40,9 +40,6 @@
 extern "C" {
 #endif /* defined(__cplusplus) */
 
-struct recovery;
-extern struct recovery *recovery;
-
 struct xrow_header;
 struct xstream;
 
@@ -59,7 +56,6 @@ struct recovery {
 	 * locally or send to the replica.
 	 */
 	struct fiber *watcher;
-	uint32_t server_id;
 };
 
 struct recovery *
@@ -68,10 +64,6 @@ recovery_new(const char *wal_dirname, bool panic_on_wal_error,
 
 void
 recovery_delete(struct recovery *r);
-
-/* to be called at exit */
-void
-recovery_exit(struct recovery *r);
 
 void
 recovery_follow_local(struct recovery *r, struct xstream *stream,
@@ -82,9 +74,6 @@ recovery_stop_local(struct recovery *r);
 
 void
 recovery_finalize(struct recovery *r, struct xstream *stream);
-
-void
-recovery_fill_lsn(struct recovery *r, struct xrow_header *row);
 
 #if defined(__cplusplus)
 } /* extern "C" */
