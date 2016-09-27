@@ -107,7 +107,7 @@ box_check_slab_alloc_minimal(ssize_t slab_alloc_minimal)
 }
 
 void
-process_rw(struct request *request, struct tuple **result)
+process_rw(struct request *request, tuple_id *result)
 {
 	assert(iproto_type_is_dml(request->type));
 	rmean_collect(rmean_box, request->type, 1);
@@ -115,7 +115,7 @@ process_rw(struct request *request, struct tuple **result)
 		struct space *space = space_cache_find(request->space_id);
 		struct txn *txn = txn_begin_stmt(space);
 		access_check_space(space, PRIV_W);
-		struct tuple *tuple;
+		tuple_id tuple;
 		switch (request->type) {
 		case IPROTO_INSERT:
 		case IPROTO_REPLACE:
@@ -127,7 +127,7 @@ process_rw(struct request *request, struct tuple **result)
 		case IPROTO_UPDATE:
 			tuple = space->handler->executeUpdate(txn, space,
 							      request);
-			if (tuple && request->index_id != 0) {
+			if (tuple != TUPLE_ID_NIL && request->index_id != 0) {
 				/*
 				 * XXX: this is going to break with
 				 * sync replication for cases when
@@ -142,17 +142,17 @@ process_rw(struct request *request, struct tuple **result)
 		case IPROTO_DELETE:
 			tuple = space->handler->executeDelete(txn, space,
 							      request);
-			if (tuple && request->index_id != 0) {
+			if (tuple != TUPLE_ID_NIL && request->index_id != 0) {
 				request_rebind_to_primary_key(request, space,
 							      tuple);
 			}
 			break;
 		case IPROTO_UPSERT:
 			space->handler->executeUpsert(txn, space, request);
-			tuple = NULL;
+			tuple = TUPLE_ID_NIL;
 			break;
 		default:
-			tuple = NULL;
+			tuple = TUPLE_ID_NIL;
 		}
 		/*
 		 * Pin the tuple locally before the commit,
@@ -162,7 +162,7 @@ process_rw(struct request *request, struct tuple **result)
 		TupleRefNil ref(tuple);
 		txn_commit_stmt(txn, request);
 		if (result) {
-			if (tuple)
+			if (tuple != TUPLE_ID_NIL)
 				tuple_bless(tuple);
 			*result = tuple;
 		}
@@ -526,7 +526,7 @@ boxk(enum iproto_type type, uint32_t space_id, const char *format, ...)
 }
 
 int
-box_return_tuple(box_function_ctx_t *ctx, box_tuple_t *tuple)
+box_return_tuple(box_function_ctx_t *ctx, box_tuple_t tuple)
 {
 	try {
 		port_add_tuple(ctx->port, tuple);
@@ -550,10 +550,10 @@ box_space_id_by_name(const char *name, uint32_t len)
 	assert(p < buf + sizeof(buf));
 
 	/* NOTE: error and missing key cases are indistinguishable */
-	box_tuple_t *tuple;
+	box_tuple_t tuple;
 	if (box_index_get(BOX_VSPACE_ID, 2, buf, p, &tuple) != 0)
 		return BOX_ID_NIL;
-	if (tuple == NULL)
+	if (tuple == TUPLE_ID_NIL)
 		return BOX_ID_NIL;
 	return box_tuple_field_u32(tuple, 0, BOX_ID_NIL);
 }
@@ -572,17 +572,17 @@ box_index_id_by_name(uint32_t space_id, const char *name, uint32_t len)
 	assert(p < buf + sizeof(buf));
 
 	/* NOTE: error and missing key cases are indistinguishable */
-	box_tuple_t *tuple;
+	box_tuple_t tuple;
 	if (box_index_get(BOX_VINDEX_ID, 2, buf, p, &tuple) != 0)
 		return BOX_ID_NIL;
-	if (tuple == NULL)
+	if (tuple == TUPLE_ID_NIL)
 		return BOX_ID_NIL;
 	return box_tuple_field_u32(tuple, 1, BOX_ID_NIL);
 }
 /** \endcond public */
 
 int
-box_process1(struct request *request, box_tuple_t **result)
+box_process1(struct request *request, box_tuple_t *result)
 {
 	try {
 		box_check_writable();
@@ -617,7 +617,7 @@ box_select(struct port *port, uint32_t space_id, uint32_t index_id,
 
 int
 box_insert(uint32_t space_id, const char *tuple, const char *tuple_end,
-	   box_tuple_t **result)
+	   box_tuple_t *result)
 {
 	mp_tuple_assert(tuple, tuple_end);
 	struct request *request;
@@ -631,7 +631,7 @@ box_insert(uint32_t space_id, const char *tuple, const char *tuple_end,
 
 int
 box_replace(uint32_t space_id, const char *tuple, const char *tuple_end,
-	    box_tuple_t **result)
+	    box_tuple_t *result)
 {
 	mp_tuple_assert(tuple, tuple_end);
 	struct request *request;
@@ -645,7 +645,7 @@ box_replace(uint32_t space_id, const char *tuple, const char *tuple_end,
 
 int
 box_delete(uint32_t space_id, uint32_t index_id, const char *key,
-	   const char *key_end, box_tuple_t **result)
+	   const char *key_end, box_tuple_t *result)
 {
 	mp_tuple_assert(key, key_end);
 	struct request *request;
@@ -661,7 +661,7 @@ box_delete(uint32_t space_id, uint32_t index_id, const char *key,
 int
 box_update(uint32_t space_id, uint32_t index_id, const char *key,
 	   const char *key_end, const char *ops, const char *ops_end,
-	   int index_base, box_tuple_t **result)
+	   int index_base, box_tuple_t *result)
 {
 	mp_tuple_assert(key, key_end);
 	mp_tuple_assert(ops, ops_end);
@@ -682,7 +682,7 @@ box_update(uint32_t space_id, uint32_t index_id, const char *key,
 int
 box_upsert(uint32_t space_id, uint32_t index_id, const char *tuple,
 	   const char *tuple_end, const char *ops, const char *ops_end,
-	   int index_base, box_tuple_t **result)
+	   int index_base, box_tuple_t *result)
 {
 	mp_tuple_assert(ops, ops_end);
 	mp_tuple_assert(tuple, tuple_end);
@@ -800,10 +800,10 @@ box_on_cluster_join(const tt_uuid *server_uuid)
 	class MemtxIndex *index = index_find_system(space, 0);
 	struct iterator *it = index->position();
 	index->initIterator(it, ITER_ALL, NULL, 0);
-	struct tuple *tuple;
+	tuple_id tuple;
 	/** Assign a new server id. */
 	uint32_t server_id = 1;
-	while ((tuple = it->next(it))) {
+	while ((tuple = it->next(it)) != TUPLE_ID_NIL) {
 		if (tuple_field_u32(tuple, 0) != server_id)
 			break;
 		server_id++;

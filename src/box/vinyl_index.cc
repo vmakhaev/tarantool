@@ -73,14 +73,14 @@ VinylIndex::findByKey(const char *key, uint32_t part_count) const
 	 */
 	struct vy_tx *transaction = in_txn() ?
 		(struct vy_tx *) in_txn()->engine_tx : NULL;
-	struct tuple *tuple = NULL;
+	tuple_id tuple = TUPLE_ID_NIL;
 	if (vy_get(transaction, db, key, part_count, &tuple) != 0)
 		diag_raise();
 	return tuple;
 }
 
 
-struct tuple *
+tuple_id
 VinylIndex::replace(struct tuple*, struct tuple*, enum dup_replace_mode)
 {
 	/* This method is unused by vinyl index.
@@ -97,7 +97,7 @@ VinylIndex::bsize() const
 	return vy_index_bsize(db);
 }
 
-struct tuple *
+tuple_id
 VinylIndex::min(const char *key, uint32_t part_count) const
 {
 	struct iterator *it = allocIterator();
@@ -106,7 +106,7 @@ VinylIndex::min(const char *key, uint32_t part_count) const
 	return it->next(it);
 }
 
-struct tuple *
+tuple_id
 VinylIndex::max(const char *key, uint32_t part_count) const
 {
 	struct iterator *it = allocIterator();
@@ -123,7 +123,7 @@ VinylIndex::count(enum iterator_type type, const char *key,
 	auto guard = make_scoped_guard([=]{it->free(it);});
 	initIterator(it, type, key, part_count);
 	size_t count = 0;
-	struct tuple *tuple = NULL;
+	tuple_id tuple = TUPLE_ID_NIL;
 	while ((tuple = it->next(it)) != NULL)
 		++count;
 	return count;
@@ -167,8 +167,8 @@ VinylSecondaryIndex::VinylSecondaryIndex(struct vy_env *env_arg,
 /**
  * Get tuple from the primary index by the partial tuple from secondary index.
  */
-static struct tuple *
-lookup_full_tuple(const VinylSecondaryIndex *index, struct tuple *tuple)
+static tuple_id
+lookup_full_tuple(const VinylSecondaryIndex *index, tuple_id tuple)
 {
 	assert(index->key_def->iid != 0);
 	const char *primary_key;
@@ -185,7 +185,7 @@ lookup_full_tuple(const VinylSecondaryIndex *index, struct tuple *tuple)
 struct tuple*
 VinylSecondaryIndex::findByKey(const char *key, uint32_t part_count) const
 {
-	struct tuple *tuple = VinylIndex::findByKey(key, part_count);
+	tuple_id tuple = VinylIndex::findByKey(key, part_count);
 	if (tuple) {
 		/*
 		 * A secondary index does not store all tuple fields, but
@@ -237,7 +237,7 @@ VinylSecondaryIndex::~VinylSecondaryIndex()
 		key_def_delete(key_def_secondary_to_primary);
 }
 
-struct tuple *
+tuple_id
 VinylIndex::iterator_next(struct iterator *iter) const
 {
 	struct vinyl_iterator *it = (struct vinyl_iterator *) iter;
@@ -245,7 +245,7 @@ VinylIndex::iterator_next(struct iterator *iter) const
 
 	uint32_t it_sc_version = ::sc_version;
 
-	struct tuple *tuple;
+	tuple_id tuple;
 	if (vy_cursor_next(it->cursor, &tuple) != 0)
 		diag_raise();
 	if (tuple == NULL) { /* not found */
@@ -261,14 +261,14 @@ VinylIndex::iterator_next(struct iterator *iter) const
 	return tuple;
 }
 
-struct tuple *
+tuple_id
 VinylIndex::iterator_eq(struct iterator *iter) const
 {
 	struct vinyl_iterator *it = (struct vinyl_iterator *) iter;
 	assert(it->cursor != NULL);
 
 	uint32_t it_sc_version = ::sc_version;
-	struct tuple *tuple;
+	tuple_id tuple;
 	if (vy_cursor_next(it->cursor, &tuple) != 0)
 		diag_raise();
 	if (tuple == NULL || it_sc_version != ::sc_version) {
@@ -289,19 +289,19 @@ not_found:
 	return NULL;
 }
 
-struct tuple *
+tuple_id
 VinylSecondaryIndex::iterator_next(struct iterator *iter) const
 {
-	struct tuple *tuple = VinylIndex::iterator_next(iter);
-	if (tuple)
+	tuple_id tuple = VinylIndex::iterator_next(iter);
+	if (tuple != TUPLE_ID_NIL)
 		return lookup_full_tuple(this, tuple);
 	return NULL;
 }
 
-struct tuple *
+tuple_id
 VinylSecondaryIndex::iterator_eq(struct iterator *iter) const
 {
-	struct tuple *tuple = VinylIndex::iterator_eq(iter);
+	tuple_id tuple = VinylIndex::iterator_eq(iter);
 	if (tuple)
 		return lookup_full_tuple(this, tuple);
 	return NULL;
@@ -319,27 +319,27 @@ vinyl_iterator_free(struct iterator *ptr)
 	free(ptr);
 }
 
-struct tuple *
+tuple_id
 vinyl_iterator_last(struct iterator *ptr __attribute__((unused)))
 {
-	return NULL;
+	return TUPLE_ID_NIL;
 }
 
-struct tuple *
+tuple_id
 vinyl_iterator_next(struct iterator *ptr)
 {
 	struct vinyl_iterator *it = (struct vinyl_iterator *) ptr;
 	return it->index->iterator_next(ptr);
 }
 
-static struct tuple *
+static tuple_id
 vinyl_iterator_eq(struct iterator *ptr)
 {
 	struct vinyl_iterator *it = (struct vinyl_iterator *) ptr;
 	return it->index->iterator_eq(ptr);
 }
 
-static struct tuple *
+static tuple_id
 vinyl_iterator_exact(struct iterator *ptr)
 {
 	struct vinyl_iterator *it = (struct vinyl_iterator *) ptr;

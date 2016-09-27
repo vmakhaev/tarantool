@@ -77,8 +77,8 @@ txn_stmt_new(struct txn *txn)
 
 	/* Initialize members explicitly to save time on memset() */
 	stmt->space = NULL;
-	stmt->old_tuple = NULL;
-	stmt->new_tuple = NULL;
+	stmt->old_tuple = TUPLE_ID_NIL;
+	stmt->new_tuple = TUPLE_ID_NIL;
 	stmt->engine_savepoint = NULL;
 	stmt->row = NULL;
 
@@ -167,7 +167,8 @@ txn_commit_stmt(struct txn *txn, struct request *request)
 	 *   doesn't find any rows
 	 */
 	if (!rlist_empty(&stmt->space->on_replace) &&
-	    stmt->space->run_triggers && (stmt->old_tuple || stmt->new_tuple)) {
+	    stmt->space->run_triggers && (stmt->old_tuple != TUPLE_ID_NIL ||
+					  stmt->new_tuple != TUPLE_ID_NIL)) {
 		trigger_run(&stmt->space->on_replace, txn);
 	}
 	stmt->engine_savepoint = NULL;

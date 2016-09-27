@@ -31,10 +31,10 @@
  * SUCH DAMAGE.
  */
 #include "index.h"
+#include "tuple_id.h"
 
 struct request;
 struct space;
-struct tuple;
 struct relay;
 
 enum engine_flags {
@@ -180,13 +180,13 @@ public:
 
 	virtual void
 	applySnapshotRow(struct space *space, struct request *);
-	virtual struct tuple *
+	virtual tuple_id
 	executeReplace(struct txn *, struct space *,
 		       struct request *);
-	virtual struct tuple *
+	virtual tuple_id
 	executeDelete(struct txn *, struct space *,
 		      struct request *);
-	virtual struct tuple *
+	virtual tuple_id
 	executeUpdate(struct txn *, struct space *,
 		      struct request *);
 	virtual void

@@ -32,6 +32,7 @@
  */
 #include <stdint.h>
 #include "user_def.h"
+#include "tuple_id.h"
 #include "small/region.h"
 
 #if defined(__cplusplus)
@@ -197,7 +198,7 @@ void
 priv_grant(struct user *grantee, struct priv_def *priv);
 
 void
-priv_def_create_from_tuple(struct priv_def *priv, struct tuple *tuple);
+priv_def_create_from_tuple(struct priv_def *priv, tuple_id tuple);
 
 /* }}} */
 

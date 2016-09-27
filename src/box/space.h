@@ -215,7 +215,7 @@ space_run_triggers(struct space *space, bool yesno);
  */
 void
 space_check_update(struct space *space,
-		   struct tuple *old_tuple,
-		   struct tuple *new_tuple);
+		   tuple_id old_tuple,
+		   tuple_id new_tuple);
 
 #endif /* TARANTOOL_BOX_SPACE_H_INCLUDED */

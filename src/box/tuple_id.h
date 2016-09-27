@@ -1,7 +1,7 @@
-#ifndef INCLUDES_TARANTOOL_MOD_BOX_LUA_TUPLE_H
-#define INCLUDES_TARANTOOL_MOD_BOX_LUA_TUPLE_H
+#ifndef TARANTOOL_BOX_TUPLE_ID_H_INCLUDED
+#define TARANTOOL_BOX_TUPLE_ID_H_INCLUDED
 /*
- * Copyright 2010-2016, Tarantool AUTHORS, please see AUTHORS file.
+ * Copyright 2010-2015, Tarantool AUTHORS, please see AUTHORS file.
  *
  * Redistribution and use in source and binary forms, with or
  * without modification, are permitted provided that the following
@@ -30,51 +30,38 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+#include <stdbool.h>
+#include <stdint.h>
 #include <stddef.h>
-#include <box/tuple_id.h>
 
 #if defined(__cplusplus)
 extern "C" {
 #endif /* defined(__cplusplus) */
 
-struct lua_State;
-struct mpstream;
-struct luaL_serializer;
+/** \cond public */
 
-/**
- * Push tuple on lua stack
- */
-void
-lbox_pushtuple(struct lua_State *L, tuple_id tuple);
+struct tuple;
 
-static inline int
-lbox_pushtupleornil(struct lua_State *L, tuple_id tuple)
+typedef struct tuple *tuple_id;
+
+static const tuple_id TUPLE_ID_NIL = NULL;
+
+inline void *
+tuple_id_pack(tuple_id tupid)
 {
-	if (tuple == TUPLE_ID_NIL)
-		return 0;
-	lbox_pushtuple(L, tuple);
-	return 1;
+	return (void *)tupid;
 }
 
-tuple_id
-lua_istuple(struct lua_State *L, int narg);
+inline tuple_id
+tuple_id_unpack(void *ptr)
+{
+	return (tuple_id)ptr;
+}
 
-void
-luamp_convert_key(struct lua_State *L, struct luaL_serializer *cfg,
-		  struct mpstream *stream, int index);
-
-void
-luamp_encode_tuple(struct lua_State *L, struct luaL_serializer *cfg,
-		   struct mpstream *stream, int index);
-
-void
-tuple_to_mpstream(tuple_id tuple, struct mpstream *stream);
-
-void
-box_lua_tuple_init(struct lua_State *L);
+/** \endcond public */
 
 #if defined(__cplusplus)
-} /* extern "C" */
+} /* extern "C" { */
 #endif /* defined(__cplusplus) */
 
-#endif /* INCLUDES_TARANTOOL_MOD_BOX_LUA_TUPLE_H */
+#endif /* TARANTOOL_BOX_TUPLE_ID_H_INCLUDED */

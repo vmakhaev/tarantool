@@ -38,11 +38,11 @@ struct SysviewSpace: public Handler {
 
 	virtual ~SysviewSpace() {}
 
-	virtual struct tuple *
+	virtual tuple_id
 	executeReplace(struct txn *, struct space *, struct request *) override;
-	virtual struct tuple *
+	virtual tuple_id
 	executeDelete(struct txn *, struct space *, struct request *) override;
-	virtual struct tuple *
+	virtual tuple_id
 	executeUpdate(struct txn *, struct space *, struct request *) override;
 	virtual void
 	executeUpsert(struct txn *, struct space *, struct request *) override;
@@ -52,26 +52,26 @@ struct SysviewSpace: public Handler {
 	virtual void dropIndex(Index *index) override;
 };
 
-struct tuple *
+tuple_id
 SysviewSpace::executeReplace(struct txn *, struct space *space,
 			      struct request *)
 {
 	tnt_raise(ClientError, ER_VIEW_IS_RO, space->def.name);
-	return NULL;
+	return TUPLE_ID_NIL;
 }
 
-struct tuple *
+tuple_id
 SysviewSpace::executeDelete(struct txn*, struct space *space, struct request *)
 {
 	tnt_raise(ClientError, ER_VIEW_IS_RO, space->def.name);
-	return NULL;
+	return TUPLE_ID_NIL;
 }
 
-struct tuple *
+tuple_id
 SysviewSpace::executeUpdate(struct txn*, struct space *space, struct request *)
 {
 	tnt_raise(ClientError, ER_VIEW_IS_RO, space->def.name);
-	return NULL;
+	return TUPLE_ID_NIL;
 }
 
 void

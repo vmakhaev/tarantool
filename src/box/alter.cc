@@ -116,11 +116,11 @@ access_check_ddl(uint32_t owner_uid, enum schema_object_type type)
  * is_166plus is set as false if tuple structure is 1.6.5-
  */
 static void
-key_def_check_tuple(const struct tuple *tuple, bool *is_166plus)
+key_def_check_tuple(tuple_id tuple, bool *is_166plus)
 {
 	*is_166plus = true;
 	const mp_type common_template[] = {MP_UINT, MP_UINT, MP_STR, MP_STR};
-	const char *data = tuple->data;
+	const char *data = tuple_id_get_data(tuple);
 	uint32_t field_count = mp_decode_array(&data);
 	const char *field_start = data;
 	if (field_count < 6)
@@ -407,7 +407,7 @@ key_def_fill_parts_165(struct key_def *key_def, const char *parts,
  * - fieldno of each part in the parts array is within limits
  */
 static struct key_def *
-key_def_new_from_tuple(struct tuple *tuple)
+key_def_new_from_tuple(tuple_id tuple)
 {
 	bool is_166plus;
 	key_def_check_tuple(tuple, &is_166plus);
@@ -452,7 +452,7 @@ key_def_new_from_tuple(struct tuple *tuple)
 }
 
 static void
-space_def_init_opts(struct space_def *def, struct tuple *tuple)
+space_def_init_opts(struct space_def *def, tuple_id tuple)
 {
 	/* default values of opts */
 	def->opts = space_opts_default;
@@ -483,10 +483,10 @@ space_def_init_opts(struct space_def *def, struct tuple *tuple)
 }
 
 /**
- * Fill space_def structure from struct tuple.
+ * Fill space_def structure from tuple_id.
  */
 void
-space_def_create_from_tuple(struct space_def *def, struct tuple *tuple,
+space_def_create_from_tuple(struct space_def *def, tuple_id tuple,
 			    uint32_t errcode)
 {
 	def->id = tuple_field_u32(tuple, ID);
@@ -1164,9 +1164,8 @@ static void
 on_drop_space(struct trigger * /* trigger */, void *event)
 {
 	struct txn_stmt *stmt = txn_last_stmt((struct txn *) event);
-	uint32_t id = tuple_field_u32(stmt->old_tuple ?
-				      stmt->old_tuple : stmt->new_tuple,
-				      ID);
+	uint32_t id = tuple_field_u32(stmt->old_tuple != TUPLE_ID_NIL ?
+				      stmt->old_tuple : stmt->new_tuple, ID);
 	struct space *space = space_cache_delete(id);
 	space_delete(space);
 }
@@ -1233,8 +1232,8 @@ on_replace_dd_space(struct trigger * /* trigger */, void *event)
 	struct txn *txn = (struct txn *) event;
 	txn_check_autocommit(txn, "Space _space");
 	struct txn_stmt *stmt = txn_current_stmt(txn);
-	struct tuple *old_tuple = stmt->old_tuple;
-	struct tuple *new_tuple = stmt->new_tuple;
+	tuple_id old_tuple = stmt->old_tuple;
+	tuple_id new_tuple = stmt->new_tuple;
 	/*
 	 * Things to keep in mind:
 	 * - old_tuple is set only in case of UPDATE.  For INSERT
@@ -1250,10 +1249,10 @@ on_replace_dd_space(struct trigger * /* trigger */, void *event)
 	 * old_tuple ID field, if old_tuple is set, since UPDATE
 	 * may have changed space id.
 	 */
-	uint32_t old_id = tuple_field_u32(old_tuple ?
+	uint32_t old_id = tuple_field_u32(old_tuple != TUPLE_ID_NIL ?
 					  old_tuple : new_tuple, ID);
 	struct space *old_space = space_by_id(old_id);
-	if (new_tuple != NULL && old_space == NULL) { /* INSERT */
+	if (new_tuple != TUPLE_ID_NIL && old_space == NULL) { /* INSERT */
 		struct space_def def;
 		space_def_create_from_tuple(&def, new_tuple, ER_CREATE_SPACE);
 		RLIST_HEAD(empty_list);
@@ -1270,7 +1269,7 @@ on_replace_dd_space(struct trigger * /* trigger */, void *event)
 		struct trigger *on_rollback =
 				txn_alter_trigger_new(on_drop_space, NULL);
 		txn_on_rollback(txn, on_rollback);
-	} else if (new_tuple == NULL) { /* DELETE */
+	} else if (new_tuple == TUPLE_ID_NIL) { /* DELETE */
 		access_check_ddl(old_space->def.uid, SC_SPACE);
 		/* Verify that the space is empty (has no indexes) */
 		if (old_space->index_count) {
@@ -1292,7 +1291,7 @@ on_replace_dd_space(struct trigger * /* trigger */, void *event)
 				txn_alter_trigger_new(on_drop_space, NULL);
 		txn_on_commit(txn, on_commit);
 	} else { /* UPDATE, REPLACE */
-		assert(old_space != NULL && new_tuple != NULL);
+		assert(old_space != NULL && new_tuple != TUPLE_ID_NIL);
 		/*
 		 * Allow change of space properties, but do it
 		 * in WAL-error-safe mode.
@@ -1355,11 +1354,12 @@ on_replace_dd_index(struct trigger * /* trigger */, void *event)
 	struct txn *txn = (struct txn *) event;
 	txn_check_autocommit(txn, "Space _index");
 	struct txn_stmt *stmt = txn_current_stmt(txn);
-	struct tuple *old_tuple = stmt->old_tuple;
-	struct tuple *new_tuple = stmt->new_tuple;
-	uint32_t id = tuple_field_u32(old_tuple ? old_tuple : new_tuple, ID);
-	uint32_t iid = tuple_field_u32(old_tuple ? old_tuple : new_tuple,
-				       INDEX_ID);
+	tuple_id old_tuple = stmt->old_tuple;
+	tuple_id new_tuple = stmt->new_tuple;
+	uint32_t id = tuple_field_u32(old_tuple != TUPLE_ID_NIL ?
+				      old_tuple : new_tuple, ID);
+	uint32_t iid = tuple_field_u32(old_tuple != TUPLE_ID_NIL ?
+				       old_tuple : new_tuple, INDEX_ID);
 	struct space *old_space = space_cache_find(id);
 	access_check_ddl(old_space->def.uid, SC_SPACE);
 	Index *old_index = space_index(old_space, iid);
@@ -1376,7 +1376,7 @@ on_replace_dd_index(struct trigger * /* trigger */, void *event)
 		alter_space_add_op(alter, drop_index);
 		drop_index->old_key_def = old_index->key_def;
 	}
-	if (new_tuple != NULL) {
+	if (new_tuple != TUPLE_ID_NIL) {
 		AddIndex *add_index = AlterSpaceOp::create<AddIndex>();
 		alter_space_add_op(alter, add_index);
 		add_index->new_key_def = key_def_new_from_tuple(new_tuple);
@@ -1407,9 +1407,7 @@ space_has_data(uint32_t id, uint32_t iid, uint32_t uid)
 	struct iterator *it = index->position();
 
 	index->initIterator(it, ITER_EQ, key, 1);
-	if (it->next(it))
-		return true;
-	return false;
+	return it->next(it) != TUPLE_ID_NIL;
 }
 
 bool
@@ -1493,7 +1491,7 @@ user_def_fill_auth_data(struct user_def *user, const char *auth_data)
 }
 
 void
-user_def_create_from_tuple(struct user_def *user, struct tuple *tuple)
+user_def_create_from_tuple(struct user_def *user, tuple_id tuple)
 {
 	/* In case user password is empty, fill it with \0 */
 	memset(user, 0, sizeof(*user));
@@ -1536,7 +1534,7 @@ user_cache_remove_user(struct trigger * /* trigger */, void *event)
 {
 	struct txn *txn = (struct txn *) event;
 	struct txn_stmt *stmt = txn_last_stmt(txn);
-	uint32_t uid = tuple_field_u32(stmt->old_tuple ?
+	uint32_t uid = tuple_field_u32(stmt->old_tuple != TUPLE_ID_NIL ?
 				       stmt->old_tuple : stmt->new_tuple,
 				       ID);
 	user_cache_delete(uid);
@@ -1561,20 +1559,20 @@ on_replace_dd_user(struct trigger * /* trigger */, void *event)
 	struct txn *txn = (struct txn *) event;
 	struct txn_stmt *stmt = txn_current_stmt(txn);
 	txn_check_autocommit(txn, "Space _user");
-	struct tuple *old_tuple = stmt->old_tuple;
-	struct tuple *new_tuple = stmt->new_tuple;
+	tuple_id old_tuple = stmt->old_tuple;
+	tuple_id new_tuple = stmt->new_tuple;
 
-	uint32_t uid = tuple_field_u32(old_tuple ?
+	uint32_t uid = tuple_field_u32(old_tuple != TUPLE_ID_NIL ?
 				       old_tuple : new_tuple, ID);
 	struct user *old_user = user_by_id(uid);
-	if (new_tuple != NULL && old_user == NULL) { /* INSERT */
+	if (new_tuple != TUPLE_ID_NIL && old_user == NULL) { /* INSERT */
 		struct user_def user;
 		user_def_create_from_tuple(&user, new_tuple);
 		(void) user_cache_replace(&user);
 		struct trigger *on_rollback =
 			txn_alter_trigger_new(user_cache_remove_user, NULL);
 		txn_on_rollback(txn, on_rollback);
-	} else if (new_tuple == NULL) { /* DELETE */
+	} else if (new_tuple == TUPLE_ID_NIL) { /* DELETE */
 		access_check_ddl(old_user->def.owner, SC_USER);
 		/* Can't drop guest or super user */
 		if (uid <= (uint32_t) BOX_SYSTEM_USER_ID_MAX) {
@@ -1594,7 +1592,7 @@ on_replace_dd_user(struct trigger * /* trigger */, void *event)
 			txn_alter_trigger_new(user_cache_remove_user, NULL);
 		txn_on_commit(txn, on_commit);
 	} else { /* UPDATE, REPLACE */
-		assert(old_user != NULL && new_tuple != NULL);
+		assert(old_user != NULL && new_tuple != TUPLE_ID_NIL);
 		/*
 		 * Allow change of user properties (name,
 		 * password) but first check that the change is
@@ -1610,7 +1608,7 @@ on_replace_dd_user(struct trigger * /* trigger */, void *event)
 
 /** Create a function definition from tuple. */
 static void
-func_def_create_from_tuple(struct func_def *def, struct tuple *tuple)
+func_def_create_from_tuple(struct func_def *def, tuple_id tuple)
 {
 	def->fid = tuple_field_u32(tuple, ID);
 	def->uid = tuple_field_u32(tuple, UID);
@@ -1643,9 +1641,8 @@ static void
 func_cache_remove_func(struct trigger * /* trigger */, void *event)
 {
 	struct txn_stmt *stmt = txn_last_stmt((struct txn *) event);
-	uint32_t fid = tuple_field_u32(stmt->old_tuple ?
-				       stmt->old_tuple : stmt->new_tuple,
-				       ID);
+	uint32_t fid = tuple_field_u32(stmt->old_tuple != TUPLE_ID_NIL ?
+				       stmt->old_tuple : stmt->new_tuple, ID);
 	func_cache_delete(fid);
 }
 
@@ -1669,20 +1666,20 @@ on_replace_dd_func(struct trigger * /* trigger */, void *event)
 	struct txn *txn = (struct txn *) event;
 	txn_check_autocommit(txn, "Space _func");
 	struct txn_stmt *stmt = txn_current_stmt(txn);
-	struct tuple *old_tuple = stmt->old_tuple;
-	struct tuple *new_tuple = stmt->new_tuple;
+	tuple_id old_tuple = stmt->old_tuple;
+	tuple_id new_tuple = stmt->new_tuple;
 	struct func_def def;
 
-	uint32_t fid = tuple_field_u32(old_tuple ?
+	uint32_t fid = tuple_field_u32(old_tuple != TUPLE_ID_NIL ?
 				       old_tuple : new_tuple, ID);
 	struct func *old_func = func_by_id(fid);
-	if (new_tuple != NULL && old_func == NULL) { /* INSERT */
+	if (new_tuple != TUPLE_ID_NIL && old_func == NULL) { /* INSERT */
 		func_def_create_from_tuple(&def, new_tuple);
 		func_cache_replace(&def);
 		struct trigger *on_rollback =
 			txn_alter_trigger_new(func_cache_remove_func, NULL);
 		txn_on_rollback(txn, on_rollback);
-	} else if (new_tuple == NULL) {         /* DELETE */
+	} else if (new_tuple == TUPLE_ID_NIL) {         /* DELETE */
 		func_def_create_from_tuple(&def, old_tuple);
 		/*
 		 * Can only delete func if you're the one
@@ -1699,6 +1696,7 @@ on_replace_dd_func(struct trigger * /* trigger */, void *event)
 			txn_alter_trigger_new(func_cache_remove_func, NULL);
 		txn_on_commit(txn, on_commit);
 	} else {                                /* UPDATE, REPLACE */
+		assert(old_func != NULL && new_tuple != TUPLE_ID_NIL);
 		func_def_create_from_tuple(&def, new_tuple);
 		access_check_ddl(def.uid, SC_FUNCTION);
 		struct trigger *on_commit =
@@ -1711,7 +1709,7 @@ on_replace_dd_func(struct trigger * /* trigger */, void *event)
  * Create a privilege definition from tuple.
  */
 void
-priv_def_create_from_tuple(struct priv_def *priv, struct tuple *tuple)
+priv_def_create_from_tuple(struct priv_def *priv, tuple_id tuple)
 {
 	priv->grantor_id = tuple_field_u32(tuple, ID);
 	priv->grantee_id = tuple_field_u32(tuple, UID);
@@ -1835,8 +1833,8 @@ revoke_priv(struct trigger * /* trigger */, void *event)
 {
 	struct txn *txn = (struct txn *) event;
 	struct txn_stmt *stmt = txn_last_stmt(txn);
-	struct tuple *tuple = (stmt->new_tuple ?
-			       stmt->new_tuple : stmt->old_tuple);
+	tuple_id tuple = (stmt->new_tuple != TUPLE_ID_NIL ?
+			  stmt->new_tuple : stmt->old_tuple);
 	struct priv_def priv;
 	priv_def_create_from_tuple(&priv, tuple);
 	/*
@@ -1869,25 +1867,26 @@ on_replace_dd_priv(struct trigger * /* trigger */, void *event)
 	struct txn *txn = (struct txn *) event;
 	txn_check_autocommit(txn, "Space _priv");
 	struct txn_stmt *stmt = txn_current_stmt(txn);
-	struct tuple *old_tuple = stmt->old_tuple;
-	struct tuple *new_tuple = stmt->new_tuple;
+	tuple_id old_tuple = stmt->old_tuple;
+	tuple_id new_tuple = stmt->new_tuple;
 	struct priv_def priv;
 
-	if (new_tuple != NULL && old_tuple == NULL) {	/* grant */
+	if (new_tuple != TUPLE_ID_NIL && old_tuple == TUPLE_ID_NIL) {
+								/* grant */
 		priv_def_create_from_tuple(&priv, new_tuple);
 		priv_def_check(&priv);
 		grant_or_revoke(&priv);
 		struct trigger *on_rollback =
 			txn_alter_trigger_new(revoke_priv, NULL);
 		txn_on_rollback(txn, on_rollback);
-	} else if (new_tuple == NULL) {                /* revoke */
-		assert(old_tuple);
+	} else if (new_tuple == TUPLE_ID_NIL) {                /* revoke */
+		assert(old_tuple != TUPLE_ID_NIL);
 		priv_def_create_from_tuple(&priv, old_tuple);
 		access_check_ddl(priv.grantor_id, priv.object_type);
 		struct trigger *on_commit =
 			txn_alter_trigger_new(revoke_priv, NULL);
 		txn_on_commit(txn, on_commit);
-	} else {                                       /* modify */
+	} else {						/* modify */
 		priv_def_create_from_tuple(&priv, new_tuple);
 		priv_def_check(&priv);
 		struct trigger *on_commit =
@@ -1905,7 +1904,7 @@ on_replace_dd_priv(struct trigger * /* trigger */, void *event)
  * representation of UUID, and return a 16-byte representation.
  */
 tt_uuid
-tuple_field_uuid(struct tuple *tuple, int fieldno)
+tuple_field_uuid(tuple_id tuple, int fieldno)
 {
 	const char *value = tuple_field_cstr(tuple, fieldno);
 	tt_uuid uuid;
@@ -1929,12 +1928,12 @@ on_replace_dd_schema(struct trigger * /* trigger */, void *event)
 	struct txn *txn = (struct txn *) event;
 	txn_check_autocommit(txn, "Space _schema");
 	struct txn_stmt *stmt = txn_current_stmt(txn);
-	struct tuple *old_tuple = stmt->old_tuple;
-	struct tuple *new_tuple = stmt->new_tuple;
-	const char *key = tuple_field_cstr(new_tuple ?
+	tuple_id old_tuple = stmt->old_tuple;
+	tuple_id new_tuple = stmt->new_tuple;
+	const char *key = tuple_field_cstr(new_tuple != TUPLE_ID_NIL ?
 					   new_tuple : old_tuple, 0);
 	if (strcmp(key, "cluster") == 0) {
-		if (new_tuple == NULL)
+		if (new_tuple == TUPLE_ID_NIL)
 			tnt_raise(ClientError, ER_CLUSTER_ID_IS_RO);
 		tt_uuid uu = tuple_field_uuid(new_tuple, 1);
 		CLUSTER_UUID = uu;
@@ -1951,16 +1950,16 @@ on_commit_dd_cluster(struct trigger *trigger, void *event)
 {
 	(void) trigger;
 	struct txn_stmt *stmt = txn_last_stmt((struct txn *) event);
-	struct tuple *new_tuple = stmt->new_tuple;
-	struct tuple *old_tuple = stmt->old_tuple;
+	tuple_id new_tuple = stmt->new_tuple;
+	tuple_id old_tuple = stmt->old_tuple;
 
-	if (new_tuple == NULL) {
+	if (new_tuple == TUPLE_ID_NIL) {
 		struct tt_uuid old_uuid = tuple_field_uuid(stmt->old_tuple, 1);
 		struct server *server = server_by_uuid(&old_uuid);
 		assert(server != NULL);
 		server_clear_id(server);
 		return;
-	} else if (old_tuple != NULL) {
+	} else if (old_tuple != TUPLE_ID_NIL) {
 		return; /* nothing to change */
 	}
 
@@ -2004,9 +2003,9 @@ on_replace_dd_cluster(struct trigger *trigger, void *event)
 	struct txn *txn = (struct txn *) event;
 	txn_check_autocommit(txn, "Space _cluster");
 	struct txn_stmt *stmt = txn_current_stmt(txn);
-	struct tuple *old_tuple = stmt->old_tuple;
-	struct tuple *new_tuple = stmt->new_tuple;
-	if (new_tuple != NULL) {
+	tuple_id old_tuple = stmt->old_tuple;
+	tuple_id new_tuple = stmt->new_tuple;
+	if (new_tuple != TUPLE_ID_NIL) {
 		/* Check fields */
 		uint32_t server_id = tuple_field_u32(new_tuple, 0);
 		if (server_id_is_reserved(server_id))
@@ -2018,7 +2017,7 @@ on_replace_dd_cluster(struct trigger *trigger, void *event)
 		if (tt_uuid_is_nil(&server_uuid))
 			tnt_raise(ClientError, ER_INVALID_UUID,
 				  tt_uuid_str(&server_uuid));
-		if (old_tuple != NULL) {
+		if (old_tuple != TUPLE_ID_NIL) {
 			/*
 			 * Forbid UUID changing for registered server:
 			 * it requires an extra effort to keep _cluster

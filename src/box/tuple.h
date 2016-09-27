@@ -33,6 +33,7 @@
 #include "trivia/util.h"
 
 #include "tuple_format.h"
+#include "tuple_id.h"
 
 #if defined(__cplusplus)
 extern "C" {
@@ -54,7 +55,7 @@ box_tuple_format_default(void);
 /**
  * Tuple
  */
-typedef struct tuple box_tuple_t;
+typedef tuple_id box_tuple_t;
 
 /**
  * Allocate and initialize a new tuple from a raw MsgPack Array data.
@@ -68,7 +69,7 @@ typedef struct tuple box_tuple_t;
  * \pre data, end is valid MsgPack Array
  * \sa \code box.tuple.new(data) \endcode
  */
-box_tuple_t *
+box_tuple_t
 box_tuple_new(box_tuple_format_t *format, const char *data, const char *end);
 
 /**
@@ -90,7 +91,7 @@ box_tuple_new(box_tuple_format_t *format, const char *data, const char *end);
  * \sa box_tuple_unref()
  */
 int
-box_tuple_ref(box_tuple_t *tuple);
+box_tuple_ref(box_tuple_t tuple);
 
 /**
  * Decrease the reference counter of tuple.
@@ -99,21 +100,21 @@ box_tuple_ref(box_tuple_t *tuple);
  * \sa box_tuple_ref()
  */
 void
-box_tuple_unref(box_tuple_t *tuple);
+box_tuple_unref(box_tuple_t tuple);
 
 /**
  * Return the number of fields in tuple (the size of MsgPack Array).
  * \param tuple a tuple
  */
 uint32_t
-box_tuple_field_count(const box_tuple_t *tuple);
+box_tuple_field_count(box_tuple_t tuple);
 
 /**
  * Return the number of bytes used to store internal tuple data (MsgPack Array).
  * \param tuple a tuple
  */
 size_t
-box_tuple_bsize(const box_tuple_t *tuple);
+box_tuple_bsize(box_tuple_t tuple);
 
 /**
  * Dump raw MsgPack data to the memory byffer \a buf of size \a size.
@@ -126,7 +127,7 @@ box_tuple_bsize(const box_tuple_t *tuple);
  * which would have been written if enough space had been available.
  */
 ssize_t
-box_tuple_to_buf(const box_tuple_t *tuple, char *buf, size_t size);
+box_tuple_to_buf(box_tuple_t tuple, char *buf, size_t size);
 
 /**
  * Return the associated format.
@@ -134,7 +135,7 @@ box_tuple_to_buf(const box_tuple_t *tuple, char *buf, size_t size);
  * \return tuple_format
  */
 box_tuple_format_t *
-box_tuple_format(const box_tuple_t *tuple);
+box_tuple_format(box_tuple_t tuple);
 
 /**
  * Return the raw tuple field in MsgPack format.
@@ -147,7 +148,7 @@ box_tuple_format(const box_tuple_t *tuple);
  * \retval msgpack otherwise
  */
 const char *
-box_tuple_field(const box_tuple_t *tuple, uint32_t field_id);
+box_tuple_field(box_tuple_t tuple, uint32_t field_id);
 
 /**
  * Tuple iterator
@@ -183,7 +184,7 @@ typedef struct tuple_iterator box_tuple_iterator_t;
  * \post box_tuple_position(it) == 0
  */
 box_tuple_iterator_t *
-box_tuple_iterator(box_tuple_t *tuple);
+box_tuple_iterator(box_tuple_t tuple);
 
 /**
  * Destroy and free tuple iterator
@@ -242,13 +243,13 @@ box_tuple_seek(box_tuple_iterator_t *it, uint32_t field_no);
 const char *
 box_tuple_next(box_tuple_iterator_t *it);
 
-box_tuple_t *
-box_tuple_update(const box_tuple_t *tuple, const char *expr, const
-		 char *expr_end);
+box_tuple_t
+box_tuple_update(const box_tuple_t tuple,
+		 const char *expr, const char *expr_end);
 
-box_tuple_t *
-box_tuple_upsert(const box_tuple_t *tuple, const char *expr, const
-		 char *expr_end);
+box_tuple_t
+box_tuple_upsert(const box_tuple_t tuple,
+		 const char *expr, const char *expr_end);
 
 char *
 box_tuple_extract_key(const box_tuple_t *tuple, uint32_t space_id,
@@ -306,11 +307,40 @@ struct PACKED tuple
 	uint32_t bsize;
 	/**
 	 * Fields can have variable length, and thus are packed
-	 * into a contiguous byte array. Each field is prefixed
-	 * with BER-packed field length.
+	 * into a contiguous magpacked byte array.
 	 */
 	char data[0];
 };
+
+inline struct tuple *
+tuple_id_get(tuple_id tupid)
+{
+	return tupid;
+}
+
+inline const char *
+tuple_id_get_data(tuple_id tupid)
+{
+	return tuple_id_get(tupid)->data;
+}
+
+inline const char *
+tuple_id_get_data_end(tuple_id tupid)
+{
+	return tuple_id_get(tupid)->data + tuple_id_get(tupid)->bsize;
+}
+
+inline size_t
+tuple_id_get_data_size(tuple_id tupid)
+{
+	return tuple_id_get(tupid)->bsize;
+}
+
+inline tuple_id
+tuple_id_create(struct tuple *tuple)
+{
+	return tuple;
+}
 
 /**
  * Create a new tuple from a sequence of MsgPack encoded fields.
@@ -320,7 +350,7 @@ struct PACKED tuple
  *
  * \sa box_tuple_new()
  */
-struct tuple *
+tuple_id
 tuple_new(struct tuple_format *format, const char *data, const char *end);
 
 /**
@@ -333,7 +363,7 @@ tuple_new(struct tuple_format *format, const char *data, const char *end);
  *
  * @param size  tuple->bsize
  */
-struct tuple *
+tuple_id
 tuple_alloc(struct tuple_format *format, size_t size);
 
 /**
@@ -342,21 +372,28 @@ tuple_alloc(struct tuple_format *format, size_t size);
  * Throws an error if tuple data does not match the format.
  */
 void
-tuple_init_field_map(struct tuple_format *format, struct tuple *tuple);
+tuple_init_field_map(struct tuple_format *format, tuple_id tupid);
+
+void
+tuple_ptr_delete(struct tuple *tuple);
 
 /**
- * Free the tuple.
+ * Free the tuple, for tuple.h private use.
  * @pre tuple->refs  == 0
  */
-void
-tuple_delete(struct tuple *tuple);
+inline void
+tuple_delete(tuple_id tupid)
+{
+	struct tuple *tuple = tuple_id_get(tupid);
+	tuple_ptr_delete(tuple);
+}
 
 /**
  * Check tuple data correspondence to space format;
  * throw proper exception if smth wrong.
  */
 void
-tuple_validate(struct tuple_format *format, struct tuple *tuple);
+tuple_validate(struct tuple_format *format, tuple_id tuple);
 
 /**
  * Check tuple data correspondence to space format;
@@ -372,14 +409,8 @@ tuple_validate_raw(struct tuple_format *format, const char *data);
 void
 tuple_ref_exception();
 
-/**
- * Increment tuple reference counter.
- * Throws if overflow detected.
- *
- * @pre tuple->refs + count >= 0
- */
 inline void
-tuple_ref(struct tuple *tuple)
+tuple_ptr_ref(struct tuple *tuple)
 {
 	if (tuple->refs + 1 > TUPLE_REF_MAX)
 		tuple_ref_exception();
@@ -388,25 +419,43 @@ tuple_ref(struct tuple *tuple)
 }
 
 /**
- * Decrement tuple reference counter. If it has reached zero, free the tuple.
+ * Increment tuple reference counter.
+ * Throws if overflow detected.
  *
  * @pre tuple->refs + count >= 0
  */
 inline void
-tuple_unref(struct tuple *tuple)
+tuple_ref(tuple_id tupid)
+{
+	return tuple_ptr_ref(tuple_id_get(tupid));
+}
+
+inline void
+tuple_ptr_unref(struct tuple *tuple)
 {
 	assert(tuple->refs - 1 >= 0);
 
 	tuple->refs--;
 
 	if (tuple->refs == 0)
-		tuple_delete(tuple);
+		tuple_ptr_delete(tuple);
+}
+
+/**
+ * Decrement tuple reference counter. If it has reached zero, free the tuple.
+ *
+ * @pre tuple->refs + count >= 0
+ */
+inline void
+tuple_unref(tuple_id tupid)
+{
+	return tuple_ptr_unref(tuple_id_get(tupid));
 }
 
 /** Make tuple references exception-friendly in absence of @finally. */
 struct TupleRef {
-	struct tuple *tuple;
-	TupleRef(struct tuple *arg) :tuple(arg) { tuple_ref(tuple); }
+	tuple_id tuple;
+	TupleRef(tuple_id arg) :tuple(arg) { tuple_ref(tuple); }
 	~TupleRef() { tuple_unref(tuple); }
 	TupleRef(const TupleRef &) = delete;
 	void operator=(const TupleRef&) = delete;
@@ -414,10 +463,11 @@ struct TupleRef {
 
 /** Make tuple references exception-friendly in absence of @finally. */
 struct TupleRefNil {
-	struct tuple *tuple;
-	TupleRefNil (struct tuple *arg) :tuple(arg)
-	{ if (tuple) tuple_ref(tuple); }
-	~TupleRefNil() { if (tuple) tuple_unref(tuple); }
+	tuple_id tuple;
+	TupleRefNil (tuple_id arg) : tuple(arg)
+	{ if (tuple != TUPLE_ID_NIL) tuple_ref(tuple); }
+	~TupleRefNil()
+	{ if (tuple != TUPLE_ID_NIL) tuple_unref(tuple); }
 
 	TupleRefNil(const TupleRefNil&) = delete;
 	void operator=(const TupleRefNil&) = delete;
@@ -428,10 +478,11 @@ struct TupleRefNil {
 * @param tuple tuple
 * @return tuple format instance
 */
-static inline struct tuple_format *
-tuple_format(const struct tuple *tuple)
+inline struct tuple_format *
+tuple_ptr_format(const struct tuple *tuple)
 {
-	struct tuple_format *format = tuple_format_by_id(tuple->format_id);
+	struct tuple_format *format =
+		tuple_format_by_id(tuple->format_id);
 	assert(tuple_format_id(format) == tuple->format_id);
 	return format;
 }
@@ -442,15 +493,15 @@ tuple_format(const struct tuple *tuple)
  * @return the number of fields in tuple
  */
 inline uint32_t
-tuple_field_count(const struct tuple *tuple)
+tuple_field_count(tuple_id tupid)
 {
-	const char *data = tuple->data;
+	const char *data = tuple_id_get(tupid)->data;
 	return mp_decode_array(&data);
 }
 
 /**
  * Get a field by id from an non-indexed tuple.
- * Returns a pointer to BER-length prefixed field.
+ * Returns a pointer to msgpacked field.
  *
  * @returns field data if field exists or NULL
  */
@@ -471,13 +522,13 @@ tuple_field_raw(const char *data, uint32_t bsize, uint32_t i)
 
 /**
  * Get a field from tuple by index.
- * Returns a pointer to BER-length prefixed field.
+ * Returns a pointer to msgpacked field.
  *
  * @pre field < tuple->field_count.
  * @returns field data if field exists or NULL
  */
 inline const char *
-tuple_field_old(const struct tuple_format *format,
+tuple_ptr_field(const struct tuple_format *format,
 		const struct tuple *tuple, uint32_t i)
 {
 	if (likely(i < format->field_count)) {
@@ -508,9 +559,10 @@ tuple_field_old(const struct tuple_format *format,
  * @param len pointer where the len of the field will be stored
  */
 static inline const char *
-tuple_field(const struct tuple *tuple, uint32_t i)
+tuple_field(tuple_id tupid, uint32_t i)
 {
-	return tuple_field_old(tuple_format(tuple), tuple, i);
+	struct tuple *tuple = tuple_id_get(tupid);
+	return tuple_ptr_field(tuple_ptr_format(tuple), tuple, i);
 }
 
 /**
@@ -518,7 +570,7 @@ tuple_field(const struct tuple *tuple, uint32_t i)
  * as uint32_t.
  */
 inline uint32_t
-tuple_field_u32(struct tuple *tuple, uint32_t i)
+tuple_field_u32(tuple_id tuple, uint32_t i)
 {
 	const char *field = tuple_field(tuple, i);
 	if (field == NULL)
@@ -539,7 +591,7 @@ tuple_field_u32(struct tuple *tuple, uint32_t i)
  * as a NUL-terminated string - returns a string of up to 256 bytes.
  */
 const char *
-tuple_field_cstr(struct tuple *tuple, uint32_t i);
+tuple_field_cstr(tuple_id tuple, uint32_t i);
 
 /** Helper method for the above function. */
 const char *
@@ -550,14 +602,34 @@ tuple_field_to_cstr(const char *field, uint32_t len);
  */
 struct tuple_iterator {
 	/** @cond false **/
-	/* State */
+	/* Iterating tuple */
 	struct tuple *tuple;
+	/* Begin (first field) of msgpacked tuple data */
+	const char *data_start;
+	/* End of msgpacked tuple data */
+	const char *data_end;
+	/* Number of fields in tuple */
+	uint32_t field_count;
 	/** Always points to the beginning of the next field. */
 	const char *pos;
 	/** @endcond **/
 	/** field no of the next field. */
-	int fieldno;
+	uint32_t fieldno;
 };
+
+/**
+ * @copydoc tuple_rewind
+ */
+inline void
+tuple_ptr_rewind(struct tuple_iterator *it, struct tuple *tuple)
+{
+	it->tuple = tuple;
+	it->data_start = tuple->data;
+	it->data_end = it->data_start + tuple->bsize;
+	it->field_count = mp_decode_array(&it->data_start);
+	it->pos = it->data_start;
+	it->fieldno = 0;
+}
 
 /**
  * @brief Initialize an iterator over tuple fields
@@ -577,12 +649,9 @@ struct tuple_iterator {
  * @param[in]  tuple tuple
  */
 inline void
-tuple_rewind(struct tuple_iterator *it, struct tuple *tuple)
+tuple_rewind(struct tuple_iterator *it, tuple_id tupid)
 {
-	it->tuple = tuple;
-	it->pos = tuple->data;
-	(void) mp_decode_array(&it->pos); /* Skip array header */
-	it->fieldno = 0;
+	return tuple_ptr_rewind(it, tuple_id_get(tupid));
 }
 
 /**
@@ -656,19 +725,18 @@ char *
 tuple_extract_key_raw(const char *data, const char *data_end,
 		      const struct key_def *key_def, uint32_t *key_size);
 
-struct tuple *
+tuple_id
 tuple_update(struct tuple_format *new_format,
 	     tuple_update_alloc_func f, void *alloc_ctx,
-	     const struct tuple *old_tuple,
+	     tuple_id old_tuple,
 	     const char *expr, const char *expr_end, int field_base,
 	     uint64_t *column_mask);
 
-struct tuple *
+tuple_id
 tuple_upsert(struct tuple_format *new_format,
 	     void *(*region_alloc)(void *, size_t), void *alloc_ctx,
-	     const struct tuple *old_tuple,
+	     tuple_id old_tuple,
 	     const char *expr, const char *expr_end, int field_base);
-
 
 /**
  * @brief Compare two tuples using field by field using key definition
@@ -679,51 +747,44 @@ tuple_upsert(struct tuple_format *new_format,
  * @retval <0 if key_fields(tuple_a) < key_fields(tuple_b)
  * @retval >0 if key_fields(tuple_a) > key_fields(tuple_b)
  */
-int
-tuple_compare_default(const struct tuple *tuple_a, const struct tuple *tuple_b,
-	      const struct key_def *key_def);
+inline int
+tuple_compare(tuple_id tupid_a, tuple_id tupid_b,
+	      const struct key_def *key_def)
+{
+	struct tuple *tuple_a = tuple_id_get(tupid_a);
+	struct tuple *tuple_b = tuple_id_get(tupid_b);
+	return key_def->tuple_compare(tuple_a, tuple_b, key_def);
+}
 
 /**
  * @brief Compare a tuple with a key field by field using key definition
  * @param tuple_a tuple
- * @param key BER-encoded key
+ * @param key msgpacked key
  * @param part_count number of parts in \a key
  * @param key_def key definition
  * @retval 0  if key_fields(tuple_a) == parts(key)
  * @retval <0 if key_fields(tuple_a) < parts(key)
  * @retval >0 if key_fields(tuple_a) > parts(key)
  */
-int
-tuple_compare_with_key_default(const struct tuple *tuple_a, const char *key,
-		       uint32_t part_count, const struct key_def *key_def);
-
-
 inline int
-tuple_compare_with_key(const struct tuple *tuple, const char *key,
+tuple_compare_with_key(tuple_id tupid, const char *key,
 		       uint32_t part_count, const struct key_def *key_def)
 {
+	struct tuple *tuple = tuple_id_get(tupid);
 	return key_def->tuple_compare_with_key(tuple, key, part_count, key_def);
 }
-
-inline int
-tuple_compare(const struct tuple *tuple_a, const struct tuple *tuple_b,
-	      const struct key_def *key_def)
-{
-	return key_def->tuple_compare(tuple_a, tuple_b, key_def);
-}
-
 
 /** These functions are implemented in tuple_convert.cc. */
 
 /* Store tuple in the output buffer in iproto format. */
 int
-tuple_to_obuf(struct tuple *tuple, struct obuf *buf);
+tuple_to_obuf(tuple_id tuple, struct obuf *buf);
 
 /**
  * \copydoc box_tuple_to_buf()
  */
 ssize_t
-tuple_to_buf(const struct tuple *tuple, char *buf, size_t size);
+tuple_to_buf(tuple_id tuple, char *buf, size_t size);
 
 /** Initialize tuple library */
 void
@@ -740,7 +801,7 @@ tuple_begin_snapshot();
 void
 tuple_end_snapshot();
 
-extern struct tuple *box_tuple_last;
+extern tuple_id box_tuple_last;
 
 /**
  * Convert internal `struct tuple` to public `box_tuple_t`.
@@ -749,20 +810,21 @@ extern struct tuple *box_tuple_last;
  * \sa tuple_ref
  * \throw ER_TUPLE_REF_OVERFLOW
  */
-static inline box_tuple_t *
-tuple_bless(struct tuple *tuple)
+static inline box_tuple_t
+tuple_bless(tuple_id tupid)
 {
-	assert(tuple != NULL);
+	assert(tupid != TUPLE_ID_NIL);
+	struct tuple *tuple = tuple_id_get(tupid);
 	/* Ensure tuple can be referenced at least once after return */
 	if (tuple->refs + 2 > TUPLE_REF_MAX)
 		tuple_ref_exception();
 	tuple->refs++;
 	/* Remove previous tuple */
-	if (likely(box_tuple_last != NULL))
+	if (likely(box_tuple_last != TUPLE_ID_NIL))
 		tuple_unref(box_tuple_last); /* do not throw */
 	/* Remember current tuple */
-	box_tuple_last = tuple;
-	return tuple;
+	box_tuple_last = tupid;
+	return tupid;
 }
 
 static inline void
@@ -778,7 +840,7 @@ mp_tuple_assert(const char *tuple, const char *tuple_end)
 }
 
 static inline uint32_t
-box_tuple_field_u32(box_tuple_t *tuple, uint32_t field_no, uint32_t deflt)
+box_tuple_field_u32(box_tuple_t tuple, uint32_t field_no, uint32_t deflt)
 {
 	const char *field = box_tuple_field(tuple, field_no);
 	if (field != NULL && mp_typeof(*field) == MP_UINT)

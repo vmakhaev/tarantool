@@ -81,20 +81,20 @@ public:
 	virtual size_t
 	bsize() const override;
 
-	virtual struct tuple *
+	virtual tuple_id
 	min(const char *key, uint32_t part_count) const override;
 
-	virtual struct tuple *
+	virtual tuple_id
 	max(const char *key, uint32_t part_count) const override;
 
 	virtual size_t
 	count(enum iterator_type type, const char *key, uint32_t part_count)
 		const override;
 
-	virtual struct tuple *
+	virtual tuple_id
 	iterator_next(struct iterator *iter) const;
 
-	virtual struct tuple *
+	virtual tuple_id
 	iterator_eq(struct iterator *iter) const;
 
 public:
@@ -147,10 +147,10 @@ public:
 	virtual void
 	open() override;
 
-	virtual struct tuple *
+	virtual tuple_id
 	iterator_next(struct iterator *iter) const override;
 
-	virtual struct tuple *
+	virtual tuple_id
 	iterator_eq(struct iterator *iter) const override;
 
 	virtual ~VinylSecondaryIndex() override;

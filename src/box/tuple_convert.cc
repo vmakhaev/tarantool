@@ -32,20 +32,24 @@
 #include "iobuf.h"
 
 int
-tuple_to_obuf(struct tuple *tuple, struct obuf *buf)
+tuple_to_obuf(tuple_id tuple, struct obuf *buf)
 {
-	if (obuf_dup(buf, tuple->data, tuple->bsize) != tuple->bsize) {
-		diag_set(OutOfMemory, tuple->bsize, "tuple_to_obuf", "dup");
+	const char *data = tuple_id_get_data(tuple);
+	size_t bsize = tuple_id_get_data_size(tuple);
+	if (obuf_dup(buf, data, bsize) != bsize) {
+		diag_set(OutOfMemory, bsize, "tuple_to_obuf", "dup");
 		return -1;
 	}
 	return 0;
 }
 
 ssize_t
-tuple_to_buf(const struct tuple *tuple, char *buf, size_t size)
+tuple_to_buf(tuple_id tuple, char *buf, size_t size)
 {
-	if (likely(tuple->bsize <= size)) {
-		memcpy(buf, tuple->data, tuple->bsize);
+	const char *data = tuple_id_get_data(tuple);
+	size_t bsize = tuple_id_get_data_size(tuple);
+	if (likely(bsize <= size)) {
+		memcpy(buf, data, bsize);
 	}
-	return tuple->bsize;
+	return bsize;
 }
