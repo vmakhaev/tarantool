@@ -2133,11 +2133,10 @@ vy_write_iterator_new(struct vy_index *index, bool is_last_level,
 		      int64_t oldest_vlsn);
 static int
 vy_write_iterator_add_run(struct vy_write_iterator *wi, struct vy_range *range,
-			  struct vy_run *run, bool is_mutable,
-			  bool control_eof);
+			  struct vy_run *run);
 static int
-vy_write_iterator_add_mem(struct vy_write_iterator *wi, struct vy_mem *mem,
-			  bool is_mutable, bool control_eof);
+vy_write_iterator_add_mem(struct vy_write_iterator *wi, struct vy_mem *mem);
+
 static int
 vy_write_iterator_next(struct vy_write_iterator *wi, struct vy_stmt **ret);
 
@@ -3530,7 +3529,7 @@ vy_task_dump_execute(struct vy_task *task)
 	 * in vy_task_dump_new().
 	 */
 	for (struct vy_mem *mem = range->mem->next; mem; mem = mem->next) {
-		rc = vy_write_iterator_add_mem(wi, mem, 0, 0);
+		rc = vy_write_iterator_add_mem(wi, mem);
 		if (rc != 0)
 			goto out;
 	}
@@ -3642,14 +3641,14 @@ vy_task_compact_execute(struct vy_task *task)
 
 	/* Compact in-memory indexes. First add mems then add runs. */
 	for (struct vy_mem *mem = range->mem; mem; mem = mem->next) {
-		rc = vy_write_iterator_add_mem(wi, mem, 0, 0);
+		rc = vy_write_iterator_add_mem(wi, mem);
 		if (rc != 0)
 			goto out;
 	}
 
 	/* Compact on disk runs. */
 	for (struct vy_run *run = range->run; run; run = run->next) {
-		rc = vy_write_iterator_add_run(wi, range, run, false, false);
+		rc = vy_write_iterator_add_run(wi, range, run);
 		if (rc != 0)
 			goto out;
 	}
@@ -7484,7 +7483,7 @@ vy_txw_iterator_open(struct vy_txw_iterator *itr,
 
 /**
  * Find position in write set of transaction. Used once in first call of
- *  get/next.
+ * get/next.
  */
 static void
 vy_txw_iterator_start(struct vy_txw_iterator *itr, struct vy_stmt **ret)
@@ -7791,14 +7790,32 @@ struct vy_merge_iterator {
 	 * means that it must switch to next range
 	 */
 	bool range_ended;
+
+	/* True if the iterator can iterate over ranges. */
+	bool has_range_iterator;
+	/* Struct for iteration over ranges of the index. */
+	struct vy_range_iterator range_iterator;
+	/* True, if no need to iterate over txw and mems. */
+	bool only_disk;
+	int64_t vlsn;
 };
 
+/* For comments @sa implementation. */
+static int
+vy_merge_iterator_next_key(struct vy_merge_iterator *itr, struct vy_stmt *in,
+			   struct vy_stmt **ret);
+
+/* For comments @sa implementation. */
+static int
+vy_merge_iterator_restore(struct vy_merge_iterator *itr,
+			  struct vy_stmt *last_stmt);
+
 /**
- * Open the iterator
+ * Open the iterator.
  */
 static void
 vy_merge_iterator_open(struct vy_merge_iterator *itr, struct vy_index *index,
-		       enum vy_order order, char *key)
+		       enum vy_order order, char *key, int64_t vlsn)
 {
 	assert(key != NULL);
 	itr->index = index;
@@ -7810,7 +7827,6 @@ vy_merge_iterator_open(struct vy_merge_iterator *itr, struct vy_index *index,
 	itr->src = NULL;
 	itr->src_count = 0;
 	itr->src_capacity = 0;
-	itr->src = NULL;
 	itr->curr_src = UINT32_MAX;
 	itr->front_id = 1;
 	itr->mutable_start = 0;
@@ -7822,10 +7838,14 @@ vy_merge_iterator_open(struct vy_merge_iterator *itr, struct vy_index *index,
 	itr->is_in_uniq_opt = false;
 	itr->search_started = false;
 	itr->range_ended = false;
+
+	itr->has_range_iterator = false;
+	itr->only_disk = false;
+	itr->vlsn = vlsn;
 }
 
 /**
- * Close the iteator and free resources
+ * Close the iteator and free resources.
  */
 static void
 vy_merge_iterator_close(struct vy_merge_iterator *itr)
@@ -7849,7 +7869,10 @@ vy_merge_iterator_close(struct vy_merge_iterator *itr)
 /**
  * Extend internal source array capacity to fit capacity sources.
  * Not necessary to call is but calling it allows to optimize internal memory
- * allocation
+ * allocation.
+ *
+ * @retval 0  success
+ * @retval -1 critical error
  */
 static int
 vy_merge_iterator_reserve(struct vy_merge_iterator *itr, uint32_t capacity)
@@ -7874,12 +7897,12 @@ vy_merge_iterator_reserve(struct vy_merge_iterator *itr, uint32_t capacity)
 /**
  * Add another source to merge iterator. Must be called before actual
  * iteration start and must not be called after.
- * See necessary order of adding requirements in struct vy_merge_iterator
+ * @sa necessary order of adding requirements in struct vy_merge_iterator
  * comments.
  * The resulting vy_stmt_iterator must be properly initialized before merge
  * iteration start.
- * param is_mutable - Source can change during merge iteration
- * param belong_range - Source belongs to a range (see vy_merge_iterator comments)
+ * @param is_mutable Source can change during merge iteration.
+ * @param belong_range Source belongs to a range (see vy_merge_iterator comments).
  */
 static struct vy_merge_src *
 vy_merge_iterator_add(struct vy_merge_iterator *itr,
@@ -7914,10 +7937,164 @@ vy_merge_iterator_set_version(struct vy_merge_iterator *itr,
 	itr->index_version = itr->index->version;
 }
 
+/**
+ * Create subiterators for runs and mems of @param range and further add
+ * them to the merge iterator as tuple sources.
+ *
+ * @retval 0  success
+ * @retval -1 critical error
+ */
+static int
+vy_merge_iterator_add_range(struct vy_merge_iterator *itr,
+			    struct vy_range *range, bool only_disk)
+{
+	assert(!itr->search_started);
+	if (range != NULL && itr->order == VINYL_EQ &&
+	    range->begin) {
+		/*
+		 * If need to find the key, but the specified
+		 * @param range is bigger than it thereat no need
+		 * to add this range.
+		 */
+		const char *min_key_data = range->begin->data;
+		if (vy_stmt_compare(min_key_data, itr->key,
+				    itr->index->key_def) > 0)
+			return 0;
+	}
+	if (range) {
+		struct vy_merge_src *sub_src;
+		if (!only_disk) {
+			/* Add mems if not only disk sources are need. */
+			for (struct vy_mem *mem = range->mem;
+			     mem; mem = mem->next) {
+				/* Only the newest range is mutable. */
+				bool is_mutable = (mem == range->mem);
+				sub_src = vy_merge_iterator_add(itr, is_mutable, true);
+				if (sub_src == NULL)
+					return -1;
+				vy_mem_iterator_open(&sub_src->mem_iterator, mem, itr->order,
+						     itr->key, itr->vlsn);
+			}
+		}
+		for (struct vy_run *run = range->run;
+		     run != NULL; run = run->next) {
+			sub_src = vy_merge_iterator_add(itr, false, true);
+			if (sub_src == NULL)
+				return -1;
+			vy_run_iterator_open(&sub_src->run_iterator, range,
+					     run, itr->order, itr->key, itr->vlsn);
+		}
+		vy_merge_iterator_set_version(itr, range);
+	}
+	return 0;
+}
+
+/**
+ * Allow the iteration over all index ranges.
+ *
+ * @retval 0  success
+ * @retval -1 critical error
+ */
+static int
+vy_merge_iterator_add_range_iterator(struct vy_merge_iterator *itr,
+				     bool only_disk)
+{
+	itr->has_range_iterator = true;
+	itr->only_disk = only_disk;
+	enum vy_order order = itr->order == VINYL_EQ ? VINYL_GE : itr->order;
+	vy_range_iterator_open(&itr->range_iterator, itr->index,
+			       order, itr->key, 0);
+	itr->curr_range = NULL;
+	vy_range_iterator_next(&itr->range_iterator, &itr->curr_range);
+	return vy_merge_iterator_add_range(itr, itr->curr_range, only_disk);
+}
+
+/**
+ * Close all subiterators that belong to range (mems, runs).
+ */
+static void
+vy_merge_iterator_close_disk(struct vy_merge_iterator *itr)
+{
+	if (itr->curr_stmt != NULL) {
+		vy_stmt_unref(itr->curr_stmt);
+		itr->curr_stmt = NULL;
+	}
+	uint32_t count = 0; /* Count of closed iterators. */
+	for (uint32_t i = 0; i < itr->src_count; ++i) {
+		struct vy_merge_src *src = itr->src + i;
+		if (src->belong_range) {
+			++count;
+			src->iterator.iface->close(&src->iterator);
+		}
+	}
+	itr->src_count -= count;
+	/*
+	 * Whereas some sources were closed need to start the search from
+	 * scratch and set attributes to initial values.
+	 */
+	itr->curr_range = NULL;
+	itr->range_version = 0;
+	itr->index_version = 0;
+	itr->curr_src = UINT32_MAX;
+	if (itr->mutable_start >= itr->src_count || !itr->src_count) {
+		itr->mutable_start = 0;
+		itr->mutable_end = 0;
+	} else if (itr->mutable_end >= itr->src_count) {
+		itr->mutable_end = itr->src_count - 1;
+	}
+	itr->is_in_uniq_opt = false;
+	itr->search_started = false;
+	itr->range_ended = false;
+}
+
+/**
+ * Go to the next range. If during the range changing version of the next range
+ * was modified then restore the iterator on the tuple passed as @param in and
+ * try go to the next range again.
+ * The first tuple of the next range is saved in @param *ret.
+ *
+ * @retval 0  success
+ * @retval -1 critical error
+ */
+static int
+vy_merge_iterator_next_range(struct vy_merge_iterator *itr, struct vy_stmt *in,
+			     struct vy_stmt **ret)
+{
+	assert(itr->has_range_iterator);
+	*ret = NULL;
+	if (itr->curr_range == NULL)
+		return 0;
+	struct vy_range *save_range = itr->curr_range;
+	/* Close sources of the current range. */
+	vy_merge_iterator_close_disk(itr);
+	itr->curr_range = save_range;
+	vy_range_iterator_next(&itr->range_iterator, &itr->curr_range);
+	/* Add sources from the next range. */
+	if (vy_merge_iterator_add_range(itr, itr->curr_range, itr->only_disk))
+		return -1;
+	struct vy_stmt *stmt = NULL;
+	/* Try to locate data in new sources. */
+	int rc = vy_merge_iterator_next_key(itr, in, &stmt);
+	if (rc != 0)
+		return rc;
+	/* If no needed data in this range then go to the next. */
+	if (!stmt && itr->range_ended && itr->curr_range != NULL)
+		return vy_merge_iterator_next_range(itr, in, ret);
+	if (itr->curr_stmt != NULL)
+		vy_stmt_unref(itr->curr_stmt);
+	itr->curr_stmt = stmt;
+	if (itr->curr_stmt != NULL) {
+		vy_stmt_ref(itr->curr_stmt);
+	}
+	*ret = itr->curr_stmt;
+	return 0;
+}
+
 /*
- * Try to restore position of merge iterator
- * @retval 0	if position did not change (iterator started)
- * @retval -2	iterator is no more valid
+ * Check if the version of the range was changed.
+ *
+ * @retval 0  if position did not change (iterator started)
+ * @retval -2 iterator is no more valid
  */
 static int
 vy_merge_iterator_check_version(struct vy_merge_iterator *itr)
@@ -7935,10 +8112,11 @@ vy_merge_iterator_check_version(struct vy_merge_iterator *itr)
 
 /**
  * Move all source iterating positioned to equal to current stmt (previous
- * result of get) to the next position
- * return 0 : OK
- * return -1 : read error
- * return -2 : iterator is not valid anymore
+ * result of get) to the next position.
+ *
+ * @retval 0  success
+ * @retval -1 critical error
+ * @retval -2 invalid iterator
  */
 static int
 vy_merge_iterator_propagate(struct vy_merge_iterator *itr)
@@ -8051,9 +8229,9 @@ restart:
  * to the minimum with specific front_id equal to itr->front_id.
  * Guaranteed that all other sources will have different front_id.
  *
- * @retval 0 : success or EOF
- * @retval -1 : read error
- * @retval -2 : iterator is not valid anymore
+ * @retval 0  success or EOF
+ * @retval -1 read error
+ * @retval -2 iterator is not valid anymore
  */
 static int
 vy_merge_iterator_locate(struct vy_merge_iterator *itr,
@@ -8116,42 +8294,61 @@ vy_merge_iterator_locate(struct vy_merge_iterator *itr,
 
 /**
  * Iterate to the next key
- * @retval 0 success or EOF (*ret == NULL)
- * @retval -1 read error
- * @retval -2 iterator is not valid anymore
+ *
+ * @retval 0  success or EOF (*ret == NULL)
+ * @retval -1 critical error
  */
 static int
 vy_merge_iterator_next_key(struct vy_merge_iterator *itr, struct vy_stmt *in,
 			   struct vy_stmt **ret)
 {
-	(void)in;
 	int rc;
 	*ret = NULL;
-	if (!itr->search_started)
-		return vy_merge_iterator_locate(itr, ret);
+restart:
+	if (!itr->search_started) {
+		rc = vy_merge_iterator_locate(itr, ret);
+		goto end;
+	}
 	if (itr->is_in_uniq_opt) {
 		itr->is_in_uniq_opt = false;
 		rc = vy_merge_iterator_locate(itr, ret);
 		if (rc != 0)
-			return rc;
+			goto end;
 	}
 	rc = vy_merge_iterator_propagate(itr);
 	if (rc != 0)
-		return rc;
-	return vy_merge_iterator_locate(itr, ret);
+		goto end;
+	rc = vy_merge_iterator_locate(itr, ret);
+end:
+	if (rc == -2) {
+		/*
+		 * If the current range is invalid then restore the iterator
+		 * and try again.
+		 */
+		if (vy_merge_iterator_restore(itr, in) == -1)
+			return -1;
+		goto restart;
+	}
+	/*
+	 * If the end of the current range is reached
+	 * and the iterator can go to the next then do it.
+	 */
+	if (rc == 0 && *ret == NULL && itr->has_range_iterator)
+		return vy_merge_iterator_next_range(itr, in, ret);
+	return rc;
 }
 
 /**
  * Iterate to the next (elder) version of the same key
- * @retval 0 success or EOF (*ret == NULL)
- * @retval -1 read error
- * @retval -2 iterator is not valid anymore
+ *
+ * @retval 0  success or EOF (*ret == NULL)
+ * @retval -1 critical error
+ * @retval -2 invalid iterator
  */
 static int
-vy_merge_iterator_next_lsn(struct vy_merge_iterator *itr, struct vy_stmt *in,
-			   struct vy_stmt **ret)
+vy_merge_iterator_next_lsn_unrel(struct vy_merge_iterator *itr,
+				 struct vy_stmt **ret)
 {
-	(void)in;
 	int rc;
 	*ret = NULL;
 	if (!itr->search_started)
@@ -8202,7 +8399,6 @@ vy_merge_iterator_next_lsn(struct vy_merge_iterator *itr, struct vy_stmt *in,
 			}
 
 		} else if (itr->src[i].front_id == itr->front_id) {
-			sub_itr = &itr->src[i].iterator;
 			itr->curr_src = i;
 			if (itr->curr_stmt != NULL) {
 				vy_stmt_unref(itr->curr_stmt);
@@ -8219,12 +8415,28 @@ vy_merge_iterator_next_lsn(struct vy_merge_iterator *itr, struct vy_stmt *in,
 }
 
 /**
- * Squash in the single statement all rest statements of current key
+ * Self restoring version of the vy_merge_iterator_next_lsn().
+ *
+ * @retval 0  success or EOF (*ret == NULL)
+ * @retval -1 critical error
+ */
+static int
+vy_merge_iterator_next_lsn(struct vy_merge_iterator *itr, struct vy_stmt *in,
+			   struct vy_stmt **ret)
+{
+	int rc;
+	while ((rc = vy_merge_iterator_next_lsn_unrel(itr, ret)) == -2)
+		if (vy_merge_iterator_restore(itr, in) == -1)
+			return -1;
+	return rc;
+}
+
+/**
+ * Squash in the single statement all rest statements of the current key
  * starting from the current statement.
  *
  * @retval 0 success or EOF (*ret == NULL)
  * @retval -1 error
- * @retval -2 invalid iterator
  */
 static int
 vy_merge_iterator_squash_upsert(struct vy_merge_iterator *itr,
@@ -8232,16 +8444,27 @@ vy_merge_iterator_squash_upsert(struct vy_merge_iterator *itr,
 				struct vy_stmt **ret,
 				bool suppress_error)
 {
+	struct vy_stmt *t;
 	*ret = NULL;
-	struct vy_stmt *t = itr->curr_stmt;
+restart:
+	t = itr->curr_stmt;
 	if (t == NULL)
-		return 0;
+		return vy_merge_iterator_restore(itr, in);
 	vy_stmt_ref(t);
 	while (t->flags & SVUPSERT) {
 		struct vy_stmt *next;
-		int rc = vy_merge_iterator_next_lsn(itr, in, &next);
+		int rc = vy_merge_iterator_next_lsn_unrel(itr, &next);
 		if (rc != 0) {
 			vy_stmt_unref(t);
+			if (rc == -2) {
+				/*
+				 * If the range is outdated then restore to
+				 * the begin of the key and try again.
+				 */
+				if (vy_merge_iterator_restore(itr, in) == -1)
+					return -1;
+				goto restart;
+			}
 			return rc;
 		}
 		if (next == NULL)
@@ -8254,6 +8477,7 @@ vy_merge_iterator_squash_upsert(struct vy_merge_iterator *itr,
 			return -1;
 		t = applied;
 	}
+	assert(t != NULL);
 	*ret = t;
 	return 0;
 }
@@ -8261,11 +8485,33 @@ vy_merge_iterator_squash_upsert(struct vy_merge_iterator *itr,
 /**
  * Restore the position of merge iterator after the given key
  * and according to the initial retrieval order.
+ *
+ * @retval 0  success
+ * @retval -1 critical error
  */
 static int
 vy_merge_iterator_restore(struct vy_merge_iterator *itr,
 			  struct vy_stmt *last_stmt)
 {
+restart:
+	if (itr->has_range_iterator) {
+		/*
+		 * If there is the range iterator then need to reopen all
+		 * disk sources.
+		 */
+		vy_merge_iterator_close_disk(itr);
+		char *key = last_stmt ? last_stmt->data : itr->key;
+		enum vy_order order;
+		order = itr->order == VINYL_EQ ? VINYL_GE : itr->order;
+		vy_range_iterator_open(&itr->range_iterator, itr->index,
+				       order, key, 0);
+		itr->curr_range = NULL;
+		vy_range_iterator_next(&itr->range_iterator, &itr->curr_range);
+		if (vy_merge_iterator_add_range(itr, itr->curr_range,
+						itr->only_disk))
+			return -1;
+	}
+
 	itr->unique_optimization = false;
 	itr->is_in_uniq_opt = false;
 	int result = 0;
@@ -8273,8 +8519,11 @@ vy_merge_iterator_restore(struct vy_merge_iterator *itr,
 		struct vy_stmt_iterator *sub_itr = &itr->src[i].iterator;
 		int rc = sub_itr->iface->restore(sub_itr, last_stmt,
 						 &itr->src[i].stmt);
-		if (rc < 0)
+		if (rc < 0) {
+			if (rc == -2)
+				goto restart;
 			return rc;
+		}
 		result = result || rc;
 	}
 	return result;
@@ -8414,7 +8663,7 @@ vy_write_iterator_open(struct vy_write_iterator *wi, struct vy_index *index,
 	wi->is_last_level = is_last_level;
 	wi->goto_next_key = false;
 	wi->key = vy_stmt_from_key(index, NULL, 0);
-	vy_merge_iterator_open(&wi->mi, index, VINYL_GE, wi->key->data);
+	vy_merge_iterator_open(&wi->mi, index, VINYL_GE, wi->key->data, INT64_MAX);
 }
 
 static struct vy_write_iterator *
@@ -8432,10 +8681,10 @@ vy_write_iterator_new(struct vy_index *index, bool is_last_level,
 
 static int
 vy_write_iterator_add_run(struct vy_write_iterator *wi, struct vy_range *range,
-			  struct vy_run *run, bool is_mutable, bool control_eof)
+			  struct vy_run *run)
 {
 	struct vy_merge_src *src =
-		vy_merge_iterator_add(&wi->mi, is_mutable, control_eof);
+		vy_merge_iterator_add(&wi->mi, false, true);
 	if (src == NULL)
 		return -1;
 	vy_run_iterator_open(&src->run_iterator, range, run, VINYL_GE,
@@ -8444,11 +8693,10 @@ vy_write_iterator_add_run(struct vy_write_iterator *wi, struct vy_range *range,
 }
 
 static int
-vy_write_iterator_add_mem(struct vy_write_iterator *wi, struct vy_mem *mem,
-			  bool is_mutable, bool control_eof)
+vy_write_iterator_add_mem(struct vy_write_iterator *wi, struct vy_mem *mem)
 {
 	struct vy_merge_src *src =
-		vy_merge_iterator_add(&wi->mi, is_mutable, control_eof);
+		vy_merge_iterator_add(&wi->mi, false, true);
 	if (src == NULL)
 		return -1;
 	vy_mem_iterator_open(&src->mem_iterator, mem, VINYL_GE, wi->key->data,
@@ -8564,19 +8812,7 @@ vy_write_iterator_delete(struct vy_write_iterator *wi)
 struct vy_read_iterator {
 	/* index to iterate over */
 	struct vy_index *index;
-	/* transaction to iterate over */
-	struct vy_tx *tx;
-	bool only_disk;
 
-	/* search options */
-	enum vy_order order;
-	char *key;
-	int64_t vlsn;
-
-	/* iterator over ranges */
-	struct vy_range_iterator range_iterator;
-	/* current range */
-	struct vy_range *curr_range;
 	/* merge iterator over current range */
 	struct vy_merge_iterator merge_iterator;
 
@@ -8584,199 +8820,31 @@ struct vy_read_iterator {
 };
 
 /**
- * Open the iterator
- */
-void
-vy_read_iterator_open(struct vy_read_iterator *itr,
-		      struct vy_index *index, struct vy_tx *tx,
-		      enum vy_order order, char *key, int64_t vlsn,
-		      bool only_disk);
-
-/**
- * Get current stmt
- * return 0 : something was found
- * return 1 : no more data
- * return -1 : read error
- */
-int
-vy_read_iterator_next(struct vy_read_iterator *itr, struct vy_stmt **result);
-
-/**
- * Close the iterator and free resources.
- */
-void
-vy_read_iterator_close(struct vy_read_iterator *itr);
-
-static void
-vy_read_iterator_add_tx(struct vy_read_iterator *itr)
-{
-	assert(itr->tx != NULL);
-	struct vy_merge_src *sub_src =
-		vy_merge_iterator_add(&itr->merge_iterator, true, false);
-	vy_txw_iterator_open(&sub_src->txw_iterator, itr->index, itr->tx,
-			     itr->order, itr->key);
-}
-
-static void
-vy_read_iterator_add_mem(struct vy_read_iterator *itr)
-{
-	assert(itr->curr_range != NULL);
-	for (struct vy_mem *mem = itr->curr_range->mem; mem; mem = mem->next) {
-		/* only the newest range is mutable */
-		bool is_mutable = (mem == itr->curr_range->mem);
-		struct vy_merge_src *sub_src = vy_merge_iterator_add(
-			&itr->merge_iterator, is_mutable, true);
-		vy_mem_iterator_open(&sub_src->mem_iterator, mem, itr->order,
-				     itr->key, itr->vlsn);
-	}
-}
-
-static void
-vy_read_iterator_add_disk(struct vy_read_iterator *itr)
-{
-	assert(itr->curr_range != NULL);
-	for (struct vy_run *run = itr->curr_range->run;
-	     run != NULL; run = run->next) {
-		struct vy_merge_src *sub_src = vy_merge_iterator_add(
-			&itr->merge_iterator, false, true);
-		vy_run_iterator_open(&sub_src->run_iterator, itr->curr_range,
-				     run, itr->order, itr->key, itr->vlsn);
-	}
-}
-
-/**
- * Set up merge iterator for the current range.
- */
-void
-vy_read_iterator_use_range(struct vy_read_iterator *itr)
-{
-	if (!itr->only_disk && itr->tx != NULL)
-		vy_read_iterator_add_tx(itr);
-
-	if (itr->curr_range == NULL)
-		return;
-
-	if (!itr->only_disk)
-		vy_read_iterator_add_mem(itr);
-
-	vy_read_iterator_add_disk(itr);
-
-	/* Enable range and range index version checks */
-	vy_merge_iterator_set_version(&itr->merge_iterator, itr->curr_range);
-}
-
-/**
  * Open the iterator.
  */
-void
+int
 vy_read_iterator_open(struct vy_read_iterator *itr,
 		      struct vy_index *index, struct vy_tx *tx,
 		      enum vy_order order, char *key, int64_t vlsn,
 		      bool only_disk)
 {
 	itr->index = index;
-	itr->tx = tx;
-	itr->order = order;
-	itr->key = key;
-	itr->vlsn = vlsn;
-	itr->only_disk = only_disk;
-
 	itr->curr_stmt = NULL;
-	vy_range_iterator_open(&itr->range_iterator, index,
-			  order == VINYL_EQ ? VINYL_GE : order, key, 0);
-	itr->curr_range = NULL;
-	vy_range_iterator_next(&itr->range_iterator, &itr->curr_range);
 
-	vy_merge_iterator_open(&itr->merge_iterator, index, order, key);
-	vy_read_iterator_use_range(itr);
-}
-
-/**
- * Check versions of index and current range and restores position if
- * something was changed
- */
-static int
-vy_read_iterator_restore(struct vy_read_iterator *itr)
-{
-	char *key;
-	enum vy_order order;
-	int rc;
-restart:
-	key = itr->curr_stmt != 0 ? itr->curr_stmt->data : itr->key;
-	order = itr->order == VINYL_EQ ? VINYL_GE : itr->order;
-	vy_range_iterator_open(&itr->range_iterator, itr->index, order,
-			       key, 0);
-	itr->curr_range = NULL;
-	vy_range_iterator_next(&itr->range_iterator, &itr->curr_range);
-
-	/* Re-create merge iterator */
-	vy_merge_iterator_close(&itr->merge_iterator);
-	vy_merge_iterator_open(&itr->merge_iterator, itr->index,
-			       itr->order, itr->key);
-	vy_read_iterator_use_range(itr);
-	rc = vy_merge_iterator_restore(&itr->merge_iterator, itr->curr_stmt);
-	if (rc == -1)
-		return -1;
-	if (rc == -2)
-		goto restart;
-	return rc;
-}
-
-/**
- * Conventional wrapper around vy_merge_iterator_next_key() to automatically
- * re-create the merge iterator on vy_index/vy_range/vy_run changes.
- */
-static int
-vy_read_iterator_merge_next_key(struct vy_read_iterator *itr,
-				struct vy_stmt **ret)
-{
-	int rc;
-	*ret = NULL;
-	while ((rc = vy_merge_iterator_next_key(&itr->merge_iterator,
-						itr->curr_stmt, ret)) == -2)
-		vy_read_iterator_restore(itr);
-	return rc;
-}
-
-/**
- * Goto next range according to order
- * return 0 : something was found
- * return 1 : no more data
- * return -1 : read error
- */
-int
-vy_read_iterator_next_range(struct vy_read_iterator *itr, struct vy_stmt **ret)
-{
-	*ret = NULL;
-	assert(itr->curr_range != NULL);
-	vy_merge_iterator_close(&itr->merge_iterator);
-	vy_merge_iterator_open(&itr->merge_iterator, itr->index,
-			       itr->order, itr->key);
-	vy_range_iterator_next(&itr->range_iterator, &itr->curr_range);
-	if (itr->curr_range != NULL && itr->order == VINYL_EQ &&
-	    itr->curr_range->begin) {
-
-		const char *min_key_data = itr->curr_range->begin->data;
-		if (vy_stmt_compare(min_key_data, itr->key,
-				     itr->index->key_def) > 0)
-			itr->curr_range = NULL;
+	vy_merge_iterator_open(&itr->merge_iterator, index, order, key, vlsn);
+	if (!only_disk && tx) {
+		struct vy_merge_src *sub_src;
+		sub_src = vy_merge_iterator_add(&itr->merge_iterator, true,
+						false);
+		if (sub_src == NULL)
+			return -1;
+		vy_txw_iterator_open(&sub_src->txw_iterator, index, tx, order,
+				     key);
 	}
-	vy_read_iterator_use_range(itr);
-	struct vy_stmt *stmt = NULL;
-	int rc = vy_read_iterator_merge_next_key(itr, &stmt);
-	if (rc < 0)
+	if (vy_merge_iterator_add_range_iterator(&itr->merge_iterator,
+						 only_disk))
 		return -1;
-	assert(rc >= 0);
-	if (!stmt && itr->merge_iterator.range_ended && itr->curr_range != NULL)
-		return vy_read_iterator_next_range(itr, ret);
-	if (itr->curr_stmt != NULL)
-		vy_stmt_unref(itr->curr_stmt);
-	itr->curr_stmt = stmt;
-	if (itr->curr_stmt != NULL) {
-		vy_stmt_ref(itr->curr_stmt);
-	}
-	*ret = itr->curr_stmt;
-	return rc;
+	return 0;
 }
 
 /**
@@ -8791,30 +8859,15 @@ vy_read_iterator_next(struct vy_read_iterator *itr, struct vy_stmt **result)
 	struct vy_stmt *t = NULL;
 	struct vy_merge_iterator *mi = &itr->merge_iterator;
 	while (true) {
-		if (vy_read_iterator_merge_next_key(itr, &t))
-			return -1;
-restart:
-		if (mi->range_ended && itr->curr_range != NULL &&
-		    vy_read_iterator_next_range(itr, &t))
+		if (vy_merge_iterator_next_key(mi, itr->curr_stmt, &t))
 			return -1;
 		if (t == NULL)
 			return 0; /* No more data. */
-		int rc = vy_merge_iterator_squash_upsert(mi, itr->curr_stmt,
-							 &t, true);
-		if (rc != 0) {
-			if (rc == -1)
-				return -1;
-			do {
-				vy_read_iterator_restore(itr);
-				rc = vy_merge_iterator_next_lsn(mi,
-								itr->curr_stmt,
-								&t);
-			} while (rc == -2);
-			if (rc != 0)
-				return -1;
-			goto restart;
-		}
-		assert(t != NULL);
+		if (vy_merge_iterator_squash_upsert(mi, itr->curr_stmt, &t,
+						    true))
+			return -1;
+		if (t == NULL)
+			continue;
 		if (t->flags != SVDELETE) {
 			if (t->flags == SVUPSERT) {
 				struct vy_stmt *applied;
@@ -8862,8 +8915,9 @@ vy_index_send(struct vy_index *index, vy_send_row_f sendrow, void *ctx)
 	struct vy_stmt *key = vy_stmt_from_key(index, NULL, 0);
 	if (key == NULL)
 		return -1;
-	vy_read_iterator_open(&ri, index, NULL, VINYL_GT, key->data,
-			      vlsn, true);
+	if (vy_read_iterator_open(&ri, index, NULL, VINYL_GT, key->data,
+				  vlsn, true))
+		return -1;
 	rc = vy_read_iterator_next(&ri, &stmt);
 	for (; rc == 0 && stmt; rc = vy_read_iterator_next(&ri, &stmt)) {
 		uint32_t mp_size;
@@ -8893,7 +8947,8 @@ vy_index_read(struct vy_index *index, struct vy_stmt *key,
 	int64_t vlsn = tx != NULL ? tx->vlsn : e->xm->lsn;
 
 	struct vy_read_iterator itr;
-	vy_read_iterator_open(&itr, index, tx, order, key->data, vlsn, false);
+	if (vy_read_iterator_open(&itr, index, tx, order, key->data, vlsn, false))
+		return -1;
 	int rc = vy_read_iterator_next(&itr, result);
 	if (rc == 0 && *result) {
 		vy_stmt_ref(*result);
@@ -8911,8 +8966,9 @@ vy_readcommited(struct vy_index *index, struct vy_stmt *stmt)
 	/*
 	 * Optimization: exclude in-memory indexes from lookup
 	 */
-	vy_read_iterator_open(&itr, index, NULL, VINYL_EQ, stmt->data,
-			      INT64_MAX, true);
+	if (vy_read_iterator_open(&itr, index, NULL, VINYL_EQ, stmt->data,
+				  INT64_MAX, true))
+		return -1;
 	struct vy_stmt *t;
 	int rc = vy_read_iterator_next(&itr, &t);
 	if (rc == 0 && t) {
@@ -8936,8 +8992,9 @@ vy_range_optimize_upserts_f(va_list va)
 	fiber_reschedule();
 
 	struct vy_read_iterator itr;
-	vy_read_iterator_open(&itr, index, NULL, VINYL_EQ,
-			      stmt->data, stmt->lsn, false);
+	if (vy_read_iterator_open(&itr, index, NULL, VINYL_EQ,
+				  stmt->data, stmt->lsn, false))
+		return -1;
 	struct vy_stmt *v;
 	if (vy_read_iterator_next(&itr, &v) == 0 && v != NULL) {
 		assert(v->flags == SVREPLACE);
