@@ -41,20 +41,31 @@ struct tuple;
 struct key_def;
 struct tuple_format;
 
+typedef int (*tuple_compare_with_key_raw_t)(const struct tuple_format *format,
+					    const char *tuple,
+					    const uint32_t *field_map,
+					    const char *key,
+					    uint32_t part_count,
+					    const struct key_def *key_def);
+
 typedef int (*tuple_compare_with_key_t)(const struct tuple *tuple_a,
-			      const char *key,
-			      uint32_t part_count,
-			      const struct key_def *key_def);
+					const char *key, uint32_t part_count,
+					const struct key_def *key_def);
+
+typedef int (*tuple_compare_raw_t)(const struct tuple_format *format_a,
+				   const char *tuple_a,
+				   const uint32_t *field_map_a,
+				   const struct tuple_format *format_b,
+				   const char *tuple_b,
+				   const uint32_t *field_map_b,
+				   const struct key_def *key_def);
 
 typedef int (*tuple_compare_t)(const struct tuple *tuple_a,
-			   const struct tuple *tuple_b,
-			   const struct key_def *key_def);
+			       const struct tuple *tuple_b,
+			       const struct key_def *key_def);
 
-tuple_compare_t
-tuple_compare_create(const struct key_def *key_def);
-
-tuple_compare_with_key_t
-tuple_compare_with_key_create(const struct key_def *key_def);
+void
+tuple_compare_init(struct key_def *key_def);
 
 /**
  * @brief Compare keys using key definition.
@@ -88,7 +99,7 @@ tuple_compare_key_raw(const char *key_a, uint32_t part_count_a,
  */
 int
 tuple_compare_with_key_default_raw(const struct tuple_format *format,
-				   const char *tuple, uint32_t *field_map,
+				   const char *tuple, const uint32_t *field_map,
 				   const char *key, uint32_t part_count,
 				   const struct key_def *key_def);
 
@@ -108,9 +119,9 @@ tuple_compare_with_key_default_raw(const struct tuple_format *format,
  */
 int
 tuple_compare_default_raw(const struct tuple_format *format_a,
-			  const char *tuple_a, uint32_t *field_map_a,
+			  const char *tuple_a, const uint32_t *field_map_a,
 			  const struct tuple_format *format_b,
-			  const char *tuple_b, uint32_t *field_map_b,
+			  const char *tuple_b, const uint32_t *field_map_b,
 			  const struct key_def *key_def);
 
 /** @sa tuple_compare_default_raw */
@@ -137,6 +148,27 @@ tuple_compare_with_key(const struct tuple *tuple, const char *key,
 
 #if defined(__cplusplus)
 } /* extern "C" */
-#endif /* defined(__cplusplus) */
+
+/** @sa tuple_compare_default_raw */
+int
+tuple_compare_default(const struct tuple *tuple_a, const struct tuple *tuple_b,
+		      const struct key_def *key_def);
+
+/** @sa tuple_compare_with_key_default_raw */
+int
+tuple_compare_with_key_default(const struct tuple *tuple_a, const char *key,
+			       uint32_t part_count,
+			       const struct key_def *key_def);
+
+
+int
+tuple_compare_with_key(const struct tuple *tuple, const char *key,
+		       uint32_t part_count, const struct key_def *key_def);
+
+int
+tuple_compare(const struct tuple *tuple_a, const struct tuple *tuple_b,
+	      const struct key_def *key_def);
+
+#endif /* extern "C" */
 
 #endif /* TARANTOOL_BOX_TUPLE_COMPARE_H_INCLUDED */

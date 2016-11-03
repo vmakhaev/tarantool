@@ -5757,9 +5757,9 @@ vy_tuple_compare_raw(const char *left, const char *right,
 
 	right += offsets_size;
 	assert(mp_typeof(*right) == MP_ARRAY);
-	return tuple_compare_default_raw(format, left, (uint32_t *) left,
-					 format, right, (uint32_t *) right,
-					 key_def);
+	return key_def->tuple_compare_raw(format, left, (uint32_t *) left,
+					  format, right, (uint32_t *) right,
+					  key_def);
 }
 
 /*
@@ -5782,9 +5782,9 @@ vy_tuple_compare_with_key_raw(const char *tuple, const char *key,
 	tuple += offsets_size;
 	assert(mp_typeof(*tuple) == MP_ARRAY);
 	uint32_t part_count = mp_decode_array(&key);
-	return tuple_compare_with_key_default_raw(format, tuple,
-						  (uint32_t *) tuple, key,
-						  part_count, key_def);
+	return key_def->tuple_compare_with_key_raw(format, tuple,
+						   (uint32_t *) tuple, key,
+						   part_count, key_def);
 }
 
 static int
