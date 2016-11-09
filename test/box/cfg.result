@@ -65,6 +65,8 @@ cfg_filter(box.cfg)
         - 1073741824
       - - threads
         - 1
+      - - tuple_cache_quota
+        - 512
   - - vinyl_dir
     - <hidden>
   - - wal_dir
@@ -133,6 +135,8 @@ cfg_filter(box.cfg)
         - 1073741824
       - - threads
         - 1
+      - - tuple_cache_quota
+        - 512
   - - vinyl_dir
     - <hidden>
   - - wal_dir

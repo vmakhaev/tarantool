@@ -11,6 +11,7 @@ local default_vinyl_cfg = {
     compact_wm        = 2, -- try to maintain less than 2 runs in a range
     range_size        = 1024 * 1024 * 1024,
     page_size        = 128 * 1024,
+    tuple_cache_quota = 512, -- 512MB
 }
 
 -- all available options
@@ -60,7 +61,8 @@ local vinyl_template_cfg = {
     run_age_period    = 'number',
     run_age_wm        = 'number',
     range_size        = 'number',
-    page_size        = 'number',
+    page_size         = 'number',
+    tuple_cache_quota = 'number',
 }
 
 -- types of available options
