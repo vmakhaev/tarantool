@@ -1077,6 +1077,16 @@ struct vy_run {
 	/** Run data file. */
 	int fd;
 	struct vy_run *next;
+	/** ID of the run within the range. */
+	int id;
+	/**
+	 * ID of the range this run was initially created for.
+	 * When a range is coalesced, its runs are linked to
+	 * another range, but run files are not renamed, so we
+	 * have to remember the original range id to be able to
+	 * remove them after compaction.
+	 */
+	int64_t range_id;
 };
 
 struct vy_range {
@@ -1110,6 +1120,15 @@ struct vy_range {
 	rb_node(struct vy_range) tree_node;
 	struct heap_node   nodecompact;
 	struct heap_node   nodedump;
+	/**
+	 * If set the range must not be dumped until it is compacted.
+	 * We need this flag, because each run file is stored in a file
+	 * named after the range it belongs to, so simply linking runs
+	 * and mems is not enough to coalesce two or more neighboring
+	 * ranges - we also need to merge their run files before we can
+	 * dump anything.
+	 */
+	bool need_compact;
 	/**
 	 * Incremented whenever an in-memory index (->mem) or on disk
 	 * run (->run) is added to or deleted from this range. Used to
@@ -1763,7 +1782,7 @@ vy_run_size(struct vy_run *run)
 }
 
 static struct vy_run *
-vy_run_new()
+vy_run_new(struct vy_range *range)
 {
 	struct vy_run *run = (struct vy_run *)malloc(sizeof(struct vy_run));
 	if (unlikely(run == NULL)) {
@@ -1776,6 +1795,8 @@ vy_run_new()
 	memset(&run->info, 0, sizeof(run->info));
 	run->fd = -1;
 	run->next = NULL;
+	run->id = range->run_count;
+	run->range_id = range->id;
 	return run;
 }
 
@@ -1826,20 +1847,20 @@ vy_run_parse_name(const char *name, int64_t *index_lsn, int64_t *range_id,
 }
 
 static int
-vy_run_snprint_path(char *buf, size_t size, struct vy_range *range,
-		    int run_no, enum vy_file_type type)
+vy_run_snprint_path(char *buf, size_t size, struct vy_index *index,
+		    struct vy_run *run, enum vy_file_type type)
 {
 	return snprintf(buf, size, "%s/%016"PRIx64".%016"PRIx64".%d.%s",
-			range->index->path, range->index->key_def->opts.lsn,
-			range->id, run_no, vy_file_suffix[type]);
+			index->path, index->key_def->opts.lsn,
+			run->range_id, run->id, vy_file_suffix[type]);
 }
 
 static void
-vy_run_unlink_file(struct vy_range *range,
-		   int run_no, enum vy_file_type type)
+vy_run_unlink_file(struct vy_index *index, struct vy_run *run,
+		   enum vy_file_type type)
 {
 	char path[PATH_MAX];
-	vy_run_snprint_path(path, sizeof(path), range, run_no, type);
+	vy_run_snprint_path(path, sizeof(path), index, run, type);
 	if (unlink(path) < 0)
 		say_syserror("failed to unlink file '%s'", path);
 }
@@ -1884,6 +1905,15 @@ vy_index_acct_range_dump(struct vy_index *index, struct vy_range *range)
 	vy_index_acct_run(index, range->run);
 	histogram_discard(index->run_hist, range->run_count - 1);
 	histogram_collect(index->run_hist, range->run_count);
+}
+
+static void
+vy_index_acct_range_coalesce(struct vy_index *index,
+			     struct vy_range *r1, struct vy_range *r2)
+{
+	histogram_discard(index->run_hist, r1->run_count);
+	histogram_discard(index->run_hist, r2->run_count);
+	histogram_collect(index->run_hist, r1->run_count + r2->run_count);
 }
 
 #define FILE_ALIGN	512
@@ -2884,12 +2914,12 @@ vy_range_recover_run(struct vy_range *range, int run_no)
 		return -1;
 	}
 
-	struct vy_run *run = vy_run_new();
+	struct vy_run *run = vy_run_new(range);
 	if (run == NULL)
 		return -1;
 
 	char path[PATH_MAX];
-	vy_run_snprint_path(path, sizeof(path), range, run_no, VY_FILE_META);
+	vy_run_snprint_path(path, sizeof(path), range->index, run, VY_FILE_META);
 	int fd = open(path, O_RDONLY);
 	if (fd < 0) {
 		diag_set(SystemError, "failed to open file '%s'", path);
@@ -2939,7 +2969,7 @@ vy_range_recover_run(struct vy_range *range, int run_no)
 	close(fd);
 
 	/* Prepare data file for reading. */
-	vy_run_snprint_path(path, sizeof(path), range, run_no, VY_FILE_DATA);
+	vy_run_snprint_path(path, sizeof(path), range->index, run, VY_FILE_DATA);
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
 		diag_set(SystemError, "failed to open file '%s'", path);
@@ -3004,12 +3034,9 @@ vy_range_purge(struct vy_range *range)
 {
 	ERROR_INJECT(ERRINJ_VY_GC, return);
 
-	int run_no = range->run_count;
 	for (struct vy_run *run = range->run; run != NULL; run = run->next) {
-		assert(run_no > 0);
-		run_no--;
-		vy_run_unlink_file(range, run_no, VY_FILE_META);
-		vy_run_unlink_file(range, run_no, VY_FILE_DATA);
+		vy_run_unlink_file(range->index, run, VY_FILE_META);
+		vy_run_unlink_file(range->index, run, VY_FILE_DATA);
 	}
 }
 
@@ -3046,7 +3073,7 @@ vy_range_write_run(struct vy_range *range, struct vy_write_iterator *wi,
 				     index->key_def) >= 0)
 		return 0;
 
-	struct vy_run *run = vy_run_new();
+	struct vy_run *run = vy_run_new(range);
 	if (run == NULL)
 		return -1;
 
@@ -3075,8 +3102,7 @@ vy_range_write_run(struct vy_range *range, struct vy_write_iterator *wi,
 	 * We've successfully written a run to a new range file.
 	 * Commit the range by linking the file to a proper name.
 	 */
-	vy_run_snprint_path(new_path, sizeof(new_path), range,
-			    range->run_count, VY_FILE_DATA);
+	vy_run_snprint_path(new_path, sizeof(new_path), index, run, VY_FILE_DATA);
 	if (rename(data_path, new_path) != 0) {
 		diag_set(SystemError,
 			 "failed to rename file '%s' to '%s'",
@@ -3085,8 +3111,7 @@ vy_range_write_run(struct vy_range *range, struct vy_write_iterator *wi,
 	}
 	strcpy(data_path, new_path);
 
-	vy_run_snprint_path(new_path, sizeof(new_path), range,
-			    range->run_count, VY_FILE_META);
+	vy_run_snprint_path(new_path, sizeof(new_path), index, run, VY_FILE_META);
 	if (rename(index_path, new_path) != 0) {
 		diag_set(SystemError,
 			 "failed to rename file '%s' to '%s'",
@@ -3109,6 +3134,145 @@ fail:
 		close(data_fd);
 	}
 	return -1;
+}
+
+/* Return the amount of disk space occupied by this range's data. */
+static uint64_t
+vy_range_data_size(struct vy_range *range)
+{
+	uint64_t size = 0;
+	for (struct vy_run *run = range->run; run != NULL; run = run->next)
+		size += run->info.total;
+	return size;
+}
+
+/* Return true if the range is being processed by a task. */
+static bool
+vy_range_is_scheduled(struct vy_range *range)
+{
+	return range->nodedump.pos == UINT32_MAX;
+}
+
+/* Check whether it is worth coalescing two ranges into one. */
+static bool
+vy_range_need_coalesce(struct vy_range *r1, struct vy_range *r2)
+{
+	return vy_range_data_size(r1) + vy_range_data_size(r2) <
+		r1->index->key_def->opts.range_size / 2;
+}
+
+/*
+ * Coalesce range @src into range @dest and delete the former.
+ * Note, this function does not update position of @dest in the
+ * range tree, nor its boundaries.
+ */
+static void
+vy_range_do_coalesce(struct vy_range *dest, struct vy_range *src)
+{
+	struct vy_index *index = dest->index;
+	struct vy_scheduler *scheduler = index->env->scheduler;
+
+	say_debug("range coalesce: %s + %s",
+		  vy_range_str(dest), vy_range_str(src));
+	vy_index_acct_range_coalesce(index, dest, src);
+
+	/* Link src's mems to dest. */
+	struct vy_mem **pmem = &dest->mem;
+	while (*pmem != NULL)
+		pmem = &(*pmem)->next;
+	*pmem = src->mem;
+	dest->mem_count += src->mem_count;
+	src->mem = NULL;
+	src->mem_count = 0;
+
+	/* Link src's runs to dest. */
+	struct vy_run **prun = &dest->run;
+	while (*prun != NULL)
+		prun = &(*prun)->next;
+	*prun = src->run;
+	dest->run_count += src->run_count;
+	src->run = NULL;
+	src->run_count = 0;
+
+	/* Delete src. */
+	vy_scheduler_remove_range(index->env->scheduler, src);
+	vy_index_remove_range(index, src);
+	vy_range_delete(src);
+
+	/* Update dest's position in the scheduler heap. */
+	vy_scheduler_remove_range(scheduler, dest);
+	vy_scheduler_add_range(scheduler, dest);
+
+	/* Invalidate iterators. */
+	index->version++;
+	dest->version++;
+
+	/*
+	 * Schedule the range for compaction in order to reflect
+	 * changes on disk by merging run files.
+	 */
+	dest->need_compact = true;
+}
+
+/*
+ * Coalesce @range with its left neighbor @left, update boundaries
+ * of @range and its position in the tree, and delete @left.
+ */
+static void
+vy_range_coalesce_left(struct vy_range *range, struct vy_range *left)
+{
+	assert(vy_range_is_adjacent(left, range, range->index->key_def));
+	/*
+	 * When coalescing with the left neighbor, we must update
+	 * the range's position in the tree, because its ->begin key
+	 * is modified.
+	 */
+	vy_range_tree_remove(&range->index->tree, range);
+	if (left->begin != NULL)
+		vy_stmt_ref(left->begin);
+	vy_stmt_unref(range->begin);
+	range->begin = left->begin;
+	vy_range_do_coalesce(range, left);
+	vy_range_tree_insert(&range->index->tree, range);
+}
+
+/*
+ * Coalesce @range with its right neighbor @right, update boundaries
+ * of @range, and delete @right.
+ */
+static void
+vy_range_coalesce_right(struct vy_range *range, struct vy_range *right)
+{
+	assert(vy_range_is_adjacent(range, right, range->index->key_def));
+	/*
+	 * When coalescing with the right neighbor, we don't need to
+	 * update the range's position in the tree, because ranges are
+	 * sorted by ->begin, which is left intact.
+	 */
+	if (right->end != NULL)
+		vy_stmt_ref(right->end);
+	vy_stmt_unref(range->end);
+	range->end = right->end;
+	vy_range_do_coalesce(range, right);
+}
+
+/*
+ * Coalesce the range with one or more of its neighbors
+ * if it is small enough.
+ */
+static void
+vy_range_maybe_coalesce(struct vy_range *range)
+{
+	struct vy_index *index = range->index;
+	struct vy_range *r;
+
+	while ((r = vy_range_tree_next(&index->tree, range)) != NULL &&
+	       !vy_range_is_scheduled(r) && vy_range_need_coalesce(range, r))
+		vy_range_coalesce_right(range, r);
+
+	while ((r = vy_range_tree_prev(&index->tree, range)) != NULL &&
+	       !vy_range_is_scheduled(r) && vy_range_need_coalesce(range, r))
+		vy_range_coalesce_left(range, r);
 }
 
 /**
@@ -3272,6 +3436,7 @@ vy_range_compact_commit(struct vy_range *range, int n_parts,
 	}
 	index->version++;
 	vy_range_delete(range);
+	vy_range_maybe_coalesce(parts[0]);
 }
 
 static void
@@ -3952,16 +4117,18 @@ vy_task_dump_complete(struct vy_task *task)
 	struct vy_range *range = task->dump.range;
 	struct vy_run *run = task->dump.new_run;
 
-	say_debug("range dump %s: %s",
-		  task->status == 0 ? "complete" : "failed",
-		  vy_range_str(range));
+	if (task->status != 0) {
+		/*
+		 * No need to roll back anything on dump failure.
+		 * The range will just carry on with a new shadow
+		 * memory tree.
+		 */
+		say_debug("range dump failed: %s", vy_range_str(range));
+		vy_scheduler_add_range(env->scheduler, range);
+		return;
+	}
 
-	/*
-	 * No need to roll back anything on dump failure - the range will just
-	 * carry on with a new shadow memory tree.
-	 */
-	if (task->status != 0)
-		goto out;
+	say_debug("range dump complete: %s", vy_range_str(range));
 
 	run->next = range->run;
 	range->run = run;
@@ -3986,8 +4153,8 @@ vy_task_dump_complete(struct vy_task *task)
 	}
 
 	range->version++;
-out:
 	vy_scheduler_add_range(env->scheduler, range);
+	vy_range_maybe_coalesce(range);
 }
 
 static struct vy_task *
@@ -4391,8 +4558,8 @@ static void
 vy_scheduler_update_range(struct vy_scheduler *scheduler,
 			  struct vy_range *range)
 {
-	if (likely(range->nodedump.pos == UINT32_MAX))
-		return; /* range is being processed by a task */
+	if (likely(vy_range_is_scheduled(range)))
+		return;
 
 	vy_dump_heap_update(&scheduler->dump_heap, &range->nodedump);
 	assert(range->nodedump.pos != UINT32_MAX);
@@ -4428,7 +4595,15 @@ vy_scheduler_peek_dump(struct vy_scheduler *scheduler, struct vy_task **ptask)
 		    !vy_range_need_dump(range) &&
 		    !vy_range_need_checkpoint(range))
 			return 0; /* nothing to do */
-		*ptask = vy_task_dump_new(&scheduler->task_pool, range);
+		/*
+		 * If we need to dump a range, but cannot do it
+		 * because it was recently coalesced, run dump
+		 * along with compaction.
+		 */
+		if (range->need_compact)
+			*ptask = vy_task_compact_new(&scheduler->task_pool, range);
+		else
+			*ptask = vy_task_dump_new(&scheduler->task_pool, range);
 		if (*ptask == NULL)
 			return -1; /* oom */
 		vy_scheduler_remove_range(scheduler, range);
