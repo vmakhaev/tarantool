@@ -222,7 +222,7 @@ tuple_compare_field(const char *field_a, const char *field_b,
 	}
 }
 
-int
+static int
 tuple_compare_default_raw(const struct tuple_format *format_a,
 			  const char *tuple_a, const uint32_t *field_map_a,
 			  const struct tuple_format *format_b,
@@ -264,16 +264,6 @@ tuple_compare(const struct tuple *tuple_a, const struct tuple *tuple_b,
 }
 
 int
-tuple_compare_default(const struct tuple *tuple_a, const struct tuple *tuple_b,
-		      const struct key_def *key_def)
-{
-	return tuple_compare_default_raw(tuple_format(tuple_a), tuple_a->data,
-					 tuple_field_map(tuple_a),
-					 tuple_format(tuple_b), tuple_b->data,
-					 tuple_field_map(tuple_b), key_def);
-}
-
-int
 tuple_compare_key_raw(const char *key_a, uint32_t part_count_a,
 		      const char *key_b, uint32_t part_count_b,
 		      const struct key_def *key_def)
@@ -300,7 +290,7 @@ tuple_compare_key_raw(const char *key_a, uint32_t part_count_a,
 	return r;
 }
 
-int
+static int
 tuple_compare_with_key_default_raw(const struct tuple_format *format,
 				   const char *tuple, const uint32_t *field_map,
 				   const char *key, uint32_t part_count,
@@ -331,21 +321,13 @@ tuple_compare_with_key_default_raw(const struct tuple_format *format,
 }
 
 int
-tuple_compare_with_key_default(const struct tuple *tuple, const char *key,
-			       uint32_t part_count,
-			       const struct key_def *key_def)
+tuple_compare_with_key(const struct tuple *tuple, const char *key,
+		       uint32_t part_count, const struct key_def *key_def)
 {
 	return tuple_compare_with_key_default_raw(tuple_format(tuple),
 						  tuple->data,
 						  (uint32_t *) tuple, key,
 						  part_count, key_def);
-}
-
-int
-tuple_compare_with_key(const struct tuple *tuple, const char *key,
-		       uint32_t part_count, const struct key_def *key_def)
-{
-	return key_def->tuple_compare_with_key(tuple, key, part_count, key_def);
 }
 
 template <int TYPE>
@@ -755,33 +737,9 @@ tuple_compare_with_key_create_raw(const struct key_def *def)
 	return tuple_compare_with_key_default_raw;
 }
 
-static inline int
-tuple_compare_from_raw(const struct tuple *tuple_a, const struct tuple *tuple_b,
-		       const struct key_def *key_def)
-{
-	return key_def->tuple_compare_raw(tuple_format(tuple_a), tuple_a->data,
-					  (uint32_t *) tuple_a,
-					  tuple_format(tuple_b), tuple_b->data,
-					  (uint32_t *) tuple_b, key_def);
-}
-
-static inline int
-tuple_compare_with_key_from_raw(const struct tuple *tuple, const char *key,
-				uint32_t part_count,
-				const struct key_def *key_def)
-{
-	return key_def->tuple_compare_with_key_raw(tuple_format(tuple),
-						   tuple->data,
-						   (uint32_t *) tuple, key,
-						   part_count, key_def);
-}
-
 void
 tuple_compare_init(struct key_def *key_def)
 {
-	key_def->tuple_compare = tuple_compare_from_raw;
-	key_def->tuple_compare_with_key = tuple_compare_with_key_from_raw;
-
 	key_def->tuple_compare_raw = tuple_compare_create_raw(key_def);
 	key_def->tuple_compare_with_key_raw =
 		tuple_compare_with_key_create_raw(key_def);

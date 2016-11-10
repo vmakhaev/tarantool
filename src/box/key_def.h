@@ -221,9 +221,7 @@ struct key_def {
 	struct key_opts opts;
 	/** comparators */
 	tuple_compare_raw_t tuple_compare_raw;
-	tuple_compare_t tuple_compare;
 	tuple_compare_with_key_raw_t tuple_compare_with_key_raw;
-	tuple_compare_with_key_t tuple_compare_with_key;
 	/** The size of the 'parts' array. */
 	uint32_t part_count;
 	/** Description of parts of a multipart index. */
