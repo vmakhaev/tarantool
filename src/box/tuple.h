@@ -331,8 +331,6 @@ struct PACKED tuple
 	uint16_t refs;
 	/** format identifier */
 	uint16_t format_id;
-	/** length of the variable part of the tuple */
-	uint32_t bsize;
 	/** MessagePack array data */
 	char data[0];
 };
@@ -418,6 +416,14 @@ tuple_unref(struct tuple *tuple)
 
 	if (tuple->refs == 0)
 		tuple_delete(tuple);
+}
+
+inline uint32_t
+tuple_bsize(const struct tuple *tuple)
+{
+	const char *pos = tuple->data;
+	mp_next(&pos);
+	return pos - tuple->data;
 }
 
 /** Make tuple references exception-friendly in absence of @finally. */

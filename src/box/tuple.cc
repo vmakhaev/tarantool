@@ -142,7 +142,6 @@ tuple_alloc(struct tuple_format *format, size_t size)
 
 	tuple->refs = 0;
 	tuple->version = snapshot_version;
-	tuple->bsize = size;
 	tuple->format_id = tuple_format_id(format);
 	tuple_format_ref(format, 1);
 
@@ -160,7 +159,8 @@ tuple_delete(struct tuple *tuple)
 	say_debug("tuple_delete(%p)", tuple);
 	assert(tuple->refs == 0);
 	struct tuple_format *format = tuple_format(tuple);
-	size_t total = sizeof(struct tuple) + tuple->bsize + format->field_map_size;
+	size_t total = sizeof(struct tuple) + tuple_bsize(tuple) +
+		format->field_map_size;
 	char *ptr = (char *) tuple - format->field_map_size;
 	tuple_format_ref(format, -1);
 	if (!memtx_alloc.is_delayed_free_mode || tuple->version == snapshot_version)
@@ -187,7 +187,8 @@ tuple_seek(struct tuple_iterator *it, uint32_t fieldno)
 		it->fieldno = fieldno;
 		return tuple_next(it);
 	} else {
-		it->pos = it->tuple->data + it->tuple->bsize;
+		it->pos = it->tuple->data;
+		mp_next(&it->pos);
 		it->fieldno = tuple_field_count(it->tuple);
 		return NULL;
 	}
@@ -196,7 +197,8 @@ tuple_seek(struct tuple_iterator *it, uint32_t fieldno)
 const char *
 tuple_next(struct tuple_iterator *it)
 {
-	const char *tuple_end = it->tuple->data + it->tuple->bsize;
+	const char *tuple_end = it->tuple->data;
+	mp_next(&tuple_end);
 	if (it->pos < tuple_end) {
 		const char *field = it->pos;
 		mp_next(&it->pos);
@@ -257,7 +259,8 @@ char *
 tuple_extract_key(const struct tuple *tuple, const struct key_def *key_def,
 		  uint32_t *key_size)
 {
-	return tuple_extract_key_raw(tuple->data, tuple->data + tuple->bsize,
+	return tuple_extract_key_raw(tuple->data,
+				     tuple->data + tuple_bsize(tuple),
 				     key_def, key_size);
 }
 
@@ -307,7 +310,7 @@ tuple_update(struct tuple_format *format,
 	const char *new_data =
 		tuple_update_execute(f, alloc_ctx,
 				     expr, expr_end, old_tuple->data,
-				     old_tuple->data + old_tuple->bsize,
+				     old_tuple->data + tuple_bsize(old_tuple),
 				     &new_size, field_base, column_mask);
 	if (new_data == NULL)
 		diag_raise();
@@ -325,7 +328,7 @@ tuple_upsert(struct tuple_format *format,
 	const char *new_data =
 		tuple_upsert_execute(region_alloc, alloc_ctx, expr, expr_end,
 				     old_tuple->data,
-				     old_tuple->data + old_tuple->bsize,
+				     old_tuple->data + tuple_bsize(old_tuple),
 				     &new_size, field_base, false);
 	if (new_data == NULL)
 		diag_raise();
@@ -472,7 +475,7 @@ size_t
 box_tuple_bsize(const box_tuple_t *tuple)
 {
 	assert(tuple != NULL);
-	return tuple->bsize;
+	return tuple_bsize(tuple);
 }
 
 ssize_t

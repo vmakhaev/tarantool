@@ -753,8 +753,9 @@ space_truncate(struct space *space)
 	/* create all indexes again, now they are empty */
 	for (int i = 0; i < index_count; i++) {
 		tuple = indexes[i];
-		if (box_insert(BOX_INDEX_ID, tuple->data,
-			       tuple->data + tuple->bsize, NULL)) {
+		const char *data = tuple->data;
+		const char *data_end = data + tuple_bsize(tuple);
+		if (box_insert(BOX_INDEX_ID, data, data_end, NULL)) {
 			diag_raise();
 		}
 	}

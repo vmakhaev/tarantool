@@ -407,7 +407,7 @@ VinylSpace::executeUpdate(struct txn *txn, struct space *space,
 	 */
 	index = (VinylIndex *)space->index[0];
 	if (vy_replace(tx, index->db, new_tuple->data,
-		       new_tuple->data + new_tuple->bsize))
+		       new_tuple->data + tuple_bsize(new_tuple)))
 		diag_raise();
 
 	/* Update secondary keys, avoid duplicates. */
@@ -428,7 +428,8 @@ VinylSpace::executeUpdate(struct txn *txn, struct space *space,
 		if (vy_delete(tx, sec_idx->db, key, part_count))
 			diag_raise();
 		vinyl_insert_secondary(sec_idx, new_tuple->data,
-				       new_tuple->data + new_tuple->bsize, tx);
+				       new_tuple->data +
+				       tuple_bsize(new_tuple), tx);
 	}
 	if (old_tuple)
 		tuple_ref(old_tuple);
@@ -537,7 +538,7 @@ VinylSpace::executeUpsert(struct txn *txn, struct space *space,
 				diag_raise();
 			vinyl_insert_secondary(sec_idx, new_tuple->data,
 					       new_tuple->data +
-					       new_tuple->bsize, tx);
+					       tuple_bsize(new_tuple), tx);
 		}
 		tuple_ref(new_tuple);
 		stmt->new_tuple = new_tuple;
