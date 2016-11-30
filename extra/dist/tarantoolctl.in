@@ -154,6 +154,15 @@ local keyword_arguments
 -- usage printer function
 local usage
 
+-- print to errno
+local function write(fmt, ...)
+    if select('#', ...) > 0 then
+        fmt = fmt:format(...)
+    end
+    io.stderr:write(fmt)
+    io.stderr:write('\n')
+end
+
 -- shift argv to remove 'tarantoolctl' from arg[0]
 local function shift_argv(arg, argno, argcount)
     for i = argno, 128 do
@@ -211,9 +220,8 @@ end
 
 local function check_file(path)
     local rv, err = loadfile(path)
-    if rv == nil then
-        log.error("%s", debug.traceback())
-        log.error("Failed to check instance file '%s'", err)
+    if rv == false then
+        write("Failed to check instance file '%s': %s", path, err)
         return err
     end
     return nil
@@ -231,12 +239,12 @@ local function load_default_file(default_file)
         local ufunc, msg = loadfile(default_file)
         -- if load fails - show last 10 lines of the log file
         if not ufunc then
-            log.error("Failed to load defaults file: %s", msg)
+            write("Failed to load defaults file: %s", msg)
         end
         debug.setfenv(ufunc, env)
         local state, msg = pcall(ufunc)
         if not state then
-            log.error('Failed to execute defaults file: %s', msg)
+            write('Failed to execute defaults file: %s', msg)
         end
         default_cfg = env.default_cfg
         instance_dir = env.instance_dir
@@ -267,26 +275,28 @@ local function load_default_file(default_file)
         -- get user data
         local user_data = ffi.C.getpwnam(ffi.cast('const char*', d.username))
         if user_data == nil then
-            log.error('Unknown user: %s', d.username)
+            write('Unknown user: %s', d.username)
             os.exit(-1)
         end
 
         -- get group data
         local group = ffi.C.getgrgid(user_data.pw_gid)
         if group == nil then
-            log.error('Group lookup by gid failed: %d', user_data.pw_gid)
+            write('Group lookup by gid failed: %d', user_data.pw_gid)
             os.exit(-1)
         end
         group_name = ffi.string(group.gr_name)
     end
 
     if instance_dir == nil then
-        log.error('Instance directory (instance_dir) is not set in %s', default_file)
+        write('Instance directory (instance_dir) is not set in %s',
+              default_file)
         os.exit(-1)
     end
 
     if not fio.stat(instance_dir) then
-        log.error('Instance directory %s does not exist', instance_dir)
+        write('Instance directory %s does not exist',
+              instance_dir)
         os.exit(-1)
     end
 end
@@ -301,7 +311,7 @@ local function find_instance_name(arg0, arg2)
     end
     local istat = fio.lstat(arg0)
     if istat == nil then
-        log.error("Can't stat %s: %s", arg0, errno.strerror())
+        write("Can't stat %s: %s", arg0, errno.strerror())
         os.exit(1)
     end
     if not istat:is_link() then usage() end
@@ -311,16 +321,16 @@ local function find_instance_name(arg0, arg2)
 end
 
 local function mkdir(dirname)
-    log.info("mkdir %s", dirname)
+    write("Directory '%s' is created", dirname)
     if not fio.mkdir(dirname, tonumber('0750', 8)) then
-        log.error("Can't mkdir %s: %s", dirname, errno.strerror())
+        write("Can't mkdir %s: %s", dirname, errno.strerror())
         os.exit(-1)
     end
 
     if not usermode and
        not fio.chown(dirname, default_cfg.username, group_name) then
-        log.error("Can't chown(%s, %s, %s): %s", default_cfg.username,
-                  group_name, dirname, errno.strerror())
+        write("Can't chown(%s, %s, %s): %s", default_cfg.username, group_name,
+              dirname, errno.strerror())
     end
 end
 
@@ -483,7 +493,7 @@ local function wrapper_cfg(cfg)
     mk_default_dirs(cfg)
     local success, data = pcall(orig_cfg, cfg)
     if not success then
-        log.error("Configuration failed: %s", data)
+        write("Configuration failed: %s", data)
         if fio.stat(default_cfg.logger) then
             os.execute('tail -n 10 ' .. default_cfg.logger)
         end
@@ -491,24 +501,49 @@ local function wrapper_cfg(cfg)
     end
 
     fiber.name(instance_name)
-    log.info('Run console at %s', console_sock)
+    write('Run console at %s', console_sock)
     console.listen(console_sock)
     -- gh-1293: members of `tarantool` group should be able to do `enter`
     local console_sock = uri.parse(console_sock).service
     local mode = '0664'
     if not fio.chmod(console_sock, tonumber(mode, 8)) then
-        log.error("Can't chmod(%s, %s) [%d]: %s", console_sock, mode, errno(),
-                  errno.strerror())
+        write("Can't chmod(%s, %s) [%d]: %s", console_sock, mode, errno(),
+              errno.strerror())
     end
 
     return data
 end
 
+-- It's not 100% result guaranteed function, but it's ok for most cases
+-- Won't help in multiple race-conditions
+-- Returns nil if tarantool already started, PID otherwise
+local function start_check()
+    local pid_file = default_cfg.pid_file
+
+    local fh = fio.open(pid_file, 'O_RDONLY')
+    if fh == nil then
+        return nil
+    end
+
+    local pid = tonumber(fh:read(64))
+    fh:close()
+
+    if pid == nil or (ffi.C.kill(pid, 0) < 0 and errno() ~= errno.ESRCH) then
+        return nil
+    end
+    return pid
+end
+
 local function start()
-    log.info("Starting instance...")
+    write("Starting instance...")
     local stat = check_file(instance_path)
     if stat ~= nil then
-        log.error("Error, while checking syntax: halting")
+        write("Error, while checking syntax: halting")
+        return 1
+    end
+    local pid = start_check()
+    if pid then
+        write("The daemon is already running: PID %s", pid)
         return 1
     end
     box.cfg = wrapper_cfg
@@ -520,7 +555,7 @@ local function start()
     local success, data = pcall(dofile, instance_path)
     -- if load fails - show last 10 lines of the log file
     if not success then
-        log.error("Start failed: %s", data)
+        write("Start failed: %s", data)
         if fio.stat(default_cfg.logger) then
             os.execute('tail -n 10 ' .. default_cfg.logger)
         end
@@ -531,16 +566,12 @@ end
 local function stop()
     local pid_file = default_cfg.pid_file
 
-    local function base_stop()
-        log.info("Stopping instance...")
-        if fio.stat(pid_file) == nil then
-            log.error("Process is not running (pid: %s)", pid_file)
-            return 0
-        end
+    write("Stopping instance...")
 
+    if fio.stat(pid_file) ~= nil then
         local f = fio.open(pid_file, 'O_RDONLY')
         if f == nil then
-            log.error("Can't read pid file %s: %s", pid_file, errno.strerror())
+            write("Can't read pid file %s: %s", pid_file, errno.strerror())
             return -1
         end
 
@@ -548,26 +579,26 @@ local function stop()
         f:close()
 
         if pid == nil or pid <= 0 then
-            log.error("Broken pid file %s", pid_file)
+            write("Broken pid file %s", pid_file)
             return -1
         end
 
         if ffi.C.kill(pid, 15) < 0 then
-            log.error("Can't kill process %d: %s", pid, errno.strerror())
+            write("Can't kill process %d: %s", pid, errno.strerror())
             return -1
         end
-        return 0
+
+        fio.unlink(pid_file)
+    else
+        write("Process is not running (pid: %s)", pid_file)
     end
 
-    local rv = base_stop()
-    if fio.stat(pid_file) then
-        fio.unlink(pid_file)
-    end
     local console_sock = uri.parse(console_sock).service
     if fio.stat(console_sock) then
         fio.unlink(console_sock)
     end
-    return rv
+
+    return 0
 end
 
 local function check()
@@ -575,14 +606,14 @@ local function check()
     if rv ~= nil then
         return 1
     end
-    log.info("File '%s' is OK", instance_path)
+    write("File '%s' is OK", instance_path)
     return 0
 end
 
 local function restart()
     local stat = check_file(instance_path)
     if stat ~= nil then
-        log.error("Error, while checking syntax: halting")
+        write("Error, while checking syntax: halting")
         return 1
     end
     stop()
@@ -617,10 +648,10 @@ end
 local function enter()
     local console_sock_path = uri.parse(console_sock).service
     if fio.stat(console_sock_path) == nil then
-        log.error("Can't connect to %s (%s)", console_sock_path, errno.strerror())
+        write("Can't connect to %s (%s)", console_sock_path, errno.strerror())
         if not usermode and errno() == errno.EACCES then
-            log.error("Please add $USER to group '%s': usermod -a -G %s $USER",
-                      group_name, group_name)
+            write("Please add $USER to group '%s': usermod -a -G %s $USER",
+                  group_name, group_name)
         end
         return -1
     end
@@ -653,30 +684,30 @@ local function status()
 
     if fio.stat(pid_file) == nil then
         if errno() == errno.ENOENT then
-            log.info('%s is stopped (pid file does not exist)', instance_name)
+            write('Instance "%s" is stopped (pid file does not exist)', instance_name)
             return 1
         end
-        log.error("Can't access pidfile %s: %s", pid_file, errno.strerror())
+        write("Can't access pidfile %s: %s", pid_file, errno.strerror())
     end
 
     if fio.stat(console_sock) == nil and errno() == errno.ENOENT then
-        log.error("Pid file exists, but the control socket (%s) doesn't",
-                  console_sock)
+        write("Pid file exists, but the control socket (%s) doesn't",
+              console_sock)
         return 2
     end
 
     local s = socket.tcp_connect('unix/', console_sock)
     if s == nil then
         if errno() ~= errno.EACCES then
-            log.warn("Can't access control socket '%s' [%d]: %s", console_sock,
-                errno(), errno.strerror())
+            write("Can't access control socket '%s' [%d]: %s", console_sock,
+                  errno(), errno.strerror())
             return 2
         end
         return 0
     end
 
     s:close()
-    log.info('%s is running (pid: %s)', instance_name, default_cfg.pid_file)
+    write('Instance "%s" is running (pid: %s)', instance_name, default_cfg.pid_file)
     return 0
 end
 
@@ -688,23 +719,23 @@ local function eval()
     local code = nil
     if filename == nil then
         if not stdin_is_file then
-            log.error("Usage:")
-            log.error(" - tarantoolctl eval instance_name file.lua")
-            log.error(" - <command> | tarantoolctl eval instance_name")
+            write("Usage:")
+            write(" - tarantoolctl eval instance_name file.lua")
+            write(" - <command> | tarantoolctl eval instance_name")
             return 1
         end
         code = io.stdin:read("*a")
-        if not loadstring(code) do
-            log.error("Error, while checking syntax: halting")
+        if not loadstring(code) then
+            write("Error, while checking syntax: halting")
             return 1
         end
     else
         if fio.stat(filename) == nil and errno() == errno.ENOENT then
-            log.error("%s: file not found", filename)
+            write("%s: file not found", filename)
             return 1
         end
         if check_file(filename) ~= nil then
-            log.error("Error, while checking syntax: halting")
+            write("Error, while checking syntax: halting")
             return 1
         end
         code = read_file(filename)
@@ -713,8 +744,8 @@ local function eval()
     assert(code ~= nil, "Check that we've successfully loaded file")
 
     if fio.stat(console_sock_path) == nil then
-        log.warn("pid file exists, but the control socket (%s) doesn't",
-                 console_sock_path)
+        write("pid file exists, but the control socket (%s) doesn't",
+              console_sock_path)
         return 2
     end
 
@@ -722,15 +753,15 @@ local function eval()
     local remote = netbox.connect(u.host, u.service,
         { user = u.login, password = u.password, console = true })
     if remote == nil then
-        log.warn("control socket exists, but tarantool doesn't listen on it")
+        write("control socket exists, but tarantool doesn't listen on it")
         return 2
     end
 
     local full_response = remote:eval(code)
     local error_response = yaml.decode(full_response)[1]
     if type(error_response) == 'table' and error_response.error then
-        log.error("Error, while reloading config:")
-        log.error(error_response.error)
+        write("Error, while reloading config:")
+        write(error_response.error)
         return 3
     end
 
@@ -746,7 +777,7 @@ local function cat()
     local format_cb   = cat_formats[cat_format]
     local is_printed  = false
     for id, file in ipairs(positional_arguments) do
-        log.info(("Processing file '%s'"):format(file))
+        write(("Processing file '%s'"):format(file))
         for lsn, record in xlog.pairs(file) do
             local sid = record.BODY.space_id
             if (lsn < from) or
@@ -765,7 +796,7 @@ local function cat()
         end
         if options.format == 'yaml' and is_printed then
             is_printed = false
-            print('...\n')
+            io.stdout:write('...\n\n')
         end
     end
 end
@@ -784,7 +815,7 @@ local function play()
         error(("Error, while connecting to host '%s'"):format(uri))
     end
     for id, file in ipairs(positional_arguments) do
-        log.info(("Processing file '%s'"):format(file))
+        write("Processing file '%s'", file)
         for lsn, record in xlog.pairs(file) do
             local sid = record.BODY.space_id
             if (lsn < from) or
@@ -826,14 +857,14 @@ local function process_local(cmd_function)
     load_default_file(default_file)
 
     if #arg < 2 then
-        log.error("Not enough arguments for '%s' command", command_name)
+        write("Not enough arguments for '%s' command", command_name)
         usage()
     end
 
     instance_path = fio.pathjoin(instance_dir, instance_name .. '.lua')
 
     if not fio.stat(instance_path) then
-        log.error('Instance %s is not found in %s', instance_name, instance_dir)
+        write('Instance %s is not found in %s', instance_name, instance_dir)
         os.exit(-1)
     end
 
@@ -860,7 +891,7 @@ local commands = setmetatable({
     play      = { func = exit_wrapper(play),      process = process_remote }
 }, {
     __index = function()
-        log.error("Unknown command '%s'", command_name)
+        write("Unknown command '%s'", command_name)
         usage()
     end
 })
@@ -871,29 +902,31 @@ usage = function()
     end):map(function(name, cmd) return name end):totable()
     table.sort(local_tbl); local_tbl = table.concat(local_tbl, '|')
 
+    local name = fio.basename(arg[0])
     if linkmode then
-        log.error("Usage: %s {%s}",                arg[0], local_tbl )
+        write("Usage: %s {%s}",                name, local_tbl)
     else
-        log.error("Usage: %s {%s} instance_name",  arg[0], local_tbl )
-        log.error("       %s connect URI",         arg[0])
-        log.error("       %s cat [file ...]",      arg[0])
-        log.error("       %s play URI [file ...]", arg[0])
-        log.error("       %s help",                arg[0])
-        log.error("")
-        log.error("Options for cat/play:")
-        log.error("    --space=<number>   filter by space number (may present more than once)")
-        log.error("    --show-system      show tuples from system space")
-        log.error("    --from=<number>    start xlog file from the specified lsn")
-        log.error("    --to=<number>      stop on specified xlog lsn")
-        log.error("    --format=<string>  cat output format ('yaml' [default], 'json', 'lua')")
-        log.error("")
+        write("Usage: %s {%s} instance_name",  name, local_tbl)
+        write("       %s connect URI",         name)
+        write("       %s cat [file ...]",      name)
+        write("       %s play URI [file ...]", name)
+        write("       %s help",                name)
+        write("")
+        write("Options for cat/play:")
+        write("    --space=<number>   filter by space number (may present more than once)")
+        write("    --show-system      show tuples from system space")
+        write("    --from=<number>    start xlog file from the specified lsn")
+        write("    --to=<number>      stop on specified xlog lsn")
+        write("    --format=<string>  cat output format ('yaml' [default], 'json', 'lua')")
+        write("")
     end
 
     if default_file ~= nil then
-        log.error("Config file: %s", default_file)
+        write("Config file: %s", default_file)
     end
     os.exit(1)
 end
+
 -- parse parameters and put result into positional/keyword_arguments
 do
     local function keyword_arguments_populate(ka)
@@ -902,6 +935,7 @@ do
         ka.to             = ka.to             or -1ULL
         ka['show-system'] = ka['show-system'] or false
         ka.format         = ka.format         or 'yaml'
+        ka.help           = ka.help           or false
         return ka
     end
 
@@ -935,7 +969,7 @@ do
 end
 
 if #arg < 2 then
-    log.error("Not enough arguments for '%s' command", command_name)
+    write("Not enough arguments for '%s' command", command_name)
     usage()
 end
 
