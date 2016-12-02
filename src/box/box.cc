@@ -769,10 +769,11 @@ space_truncate(struct space *space)
 	}
 
 	/* create all indexes again, now they are empty */
+	int64_t lsn = vclock_sum(&recovery->vclock);
 	for (int i = 0; i < index_count; i++) {
-		tuple = indexes[i];
+		tuple = key_def_tuple_update_lsn(indexes[i], lsn);
 		if (box_insert(BOX_INDEX_ID, tuple->data,
-			       tuple->data + tuple->bsize, NULL)) {
+			       tuple->data + tuple->bsize, NULL) != 0) {
 			diag_raise();
 		}
 	}
