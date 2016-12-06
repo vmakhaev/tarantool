@@ -1256,6 +1256,13 @@ struct vy_index {
 	 */
 	struct vy_merge_cache *cache;
 
+	/**
+ 	 * Conflict manager index. Contains all changes
+	 * made by transaction before they commit. Is used
+	 * to implement read committed isolation level, i.e.
+	 * the changes made by a transaction are only present
+	 * in this tree, and thus not seen by other transactions.
+	 */
 	read_set_t read_set;
 	vy_range_tree_t tree;
 	/** Number of ranges in this index. */
@@ -8708,10 +8715,9 @@ vy_merge_cache_get_next_gt(struct vy_merge_cache *cache,
 	struct vy_merge_cached_stmt *next_stmt_in_cache =
 		cache_tree_nsearch(&cache->cache_tree, prev_stmt);
 
-	struct vy_stmt *next_stmt = next_stmt_in_cache->stmt;
 	if (next_stmt_in_cache != NULL &&
 		vy_stmt_compare(prev_stmt,
-				next_stmt,
+				next_stmt_in_cache->stmt,
 				index->format,
 				index->key_def) == 0) {
 		next_stmt_in_cache =
@@ -8748,10 +8754,9 @@ vy_merge_cache_get_next_lt(struct vy_merge_cache *cache,
 	struct vy_merge_cached_stmt *next_stmt_in_cache =
 		cache_tree_psearch(&cache->cache_tree, prev_stmt);
 
-	struct vy_stmt *next_stmt = next_stmt_in_cache->stmt;
 	if (next_stmt_in_cache != NULL &&
 		vy_stmt_compare(prev_stmt,
-				next_stmt,
+				next_stmt_in_cache->stmt,
 				index->format,
 				index->key_def) == 0) {
 		next_stmt_in_cache =
@@ -8801,7 +8806,7 @@ vy_merge_cache_get_next_stmt(struct vy_merge_cache *cache,
 		  vy_stmt_part_count(key, key_def) >= key_def->part_count);
 	say_debug("order %d", order);
 	if (vy_stmt_part_count(key, key_def) >= key_def->part_count &&
-			order == ITER_EQ) {
+	    order == ITER_EQ && prev_stmt == NULL) {
 		say_debug("try pointwise cache lookup");
 		struct vy_merge_cached_stmt *cached_stmt =
 			cache_tree_search(&cache->cache_tree, key);
@@ -8852,12 +8857,17 @@ vy_invalidate_cache_on_tx_write(struct vy_merge_cache *cache,
 			    index->key_def) == 0) {
 		vy_merge_cache_del_stmt_by_ptr(cache, cached_stmt);
 	} else {
+		if (cached_stmt->next_key != NULL)
+			vy_stmt_unref(cached_stmt->next_key);
 		cached_stmt->next_key = NULL;
 		struct vy_merge_cached_stmt *next_cached =
 					cache_tree_next(&cache->cache_tree,
 							cached_stmt);
-		if (next_cached)
+		if (next_cached) {
+			if (next_cached->prev_key != NULL)
+				vy_stmt_unref(next_cached->prev_key);
 			next_cached->prev_key = NULL;
+		}
 	}
 }
 
@@ -9995,10 +10005,10 @@ vy_read_iterator_next(struct vy_read_iterator *itr, struct vy_stmt **result)
 	struct vy_stmt *cache_result;
 	if  (*(itr->vlsn) == INT64_MAX) {
 		rc = vy_merge_cache_get_next_stmt(cache,
-						      itr->key,
-						      itr->curr_stmt,
-						      itr->iterator_type,
-						      &cache_result);
+						  itr->key,
+						  itr->curr_stmt,
+						  itr->iterator_type,
+						  &cache_result);
 		say_debug("end cache lookup");
 		if (rc == 0) {
 			if (itr->curr_stmt != NULL)
@@ -10077,9 +10087,9 @@ restart:
 	 * Add statement to cache
 	 */
 
-	if (itr->tx == NULL || write_set_search_key(&itr->tx->write_set,
-						    index,
-						    *result) == NULL) {
+	if ((*(itr->vlsn) == INT64_MAX) &&
+	    (itr->tx == NULL ||
+	     !write_set_search_key(&itr->tx->write_set, index, *result))) {
 		if (itr->iterator_type == ITER_GT ||
 				itr->iterator_type == ITER_GE) {
 			vy_merge_cache_add_stmt(cache, prev_key,
