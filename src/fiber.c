@@ -40,6 +40,12 @@
 #include "trigger.h"
 #include "small/pmatomic.h"
 
+#include "sbus.h"
+#include "sbus_tnt.h"
+
+struct sbus *sbus;
+struct sbus_pool *main_pool;
+
 static int (*fiber_invoke)(fiber_func f, va_list ap);
 
 #if ENABLE_ASAN
@@ -1118,11 +1124,15 @@ fiber_init(int (*invoke)(fiber_func f, va_list ap))
 	main_thread_id = pthread_self();
 	main_cord.loop = ev_default_loop(EVFLAG_AUTO | EVFLAG_ALLOCFD);
 	cord_create(&main_cord, "main");
+	sbus = sbus_create();
+	main_pool = sbus_attach_pool(sbus, "main", 4096, 1 << 18);
 }
 
 void
 fiber_free(void)
 {
+	sbus_detach_pool(main_pool);
+	sbus_free_lock(sbus);
 	cord_destroy(&main_cord);
 }
 

@@ -40,6 +40,8 @@
 #include "main.h"
 #include "fiber.h"
 #include "cbus.h"
+#include "sbus.h"
+#include "sbus_tnt.h"
 #include "say.h"
 #include "sio.h"
 #include "evio.h"
@@ -63,6 +65,9 @@
 /* The number of iproto messages in flight */
 enum { IPROTO_MSG_MAX = 768 };
 
+struct sbus_route *net_route;
+struct sbus_route *tx_route;
+
 /* {{{ iproto_msg - declaration */
 
 /**
@@ -70,7 +75,12 @@ enum { IPROTO_MSG_MAX = 768 };
  * from all connections are queued into a single queue
  * and processed in FIFO order.
  */
-struct iproto_msg: public cmsg
+struct net_call {
+	void (*call)(struct net_call *);
+	struct net_call *call_arg;
+};
+
+struct iproto_msg: net_call
 {
 	struct iproto_connection *connection;
 
@@ -120,7 +130,7 @@ iproto_resume();
 
 
 static inline void
-iproto_msg_delete(struct cmsg *msg)
+iproto_msg_delete(struct iproto_msg *msg)
 {
 	mempool_free(&iproto_msg_pool, msg);
 	iproto_resume();
@@ -139,20 +149,6 @@ struct IprotoMsgGuard {
 
 /* {{{ iproto connection and requests */
 
-/**
- * A single global queue for all requests in all connections. All
- * requests from all connections are processed concurrently.
- * Is also used as a queue for just established connections and to
- * execute disconnect triggers. A few notes about these triggers:
- * - they need to be run in a fiber
- * - unlike an ordinary request failure, on_connect trigger
- *   failure must lead to connection close.
- * - on_connect trigger must be processed before any other
- *   request on this connection.
- */
-static struct cpipe tx_pipe;
-static struct cpipe net_pipe;
-static struct cbus net_tx_bus;
 /* A pointer to the transaction processor cord. */
 struct cord *tx_cord;
 
@@ -297,18 +293,31 @@ iproto_connection_delete(struct iproto_connection *con)
 }
 
 static void
-tx_process_misc(struct cmsg *msg);
+tx_process_misc(struct net_call *msg);
 static void
-tx_process1(struct cmsg *msg);
+tx_process1(struct net_call *msg);
 static void
-tx_process_select(struct cmsg *msg);
+tx_process_select(struct net_call *msg);
 static void
-net_send_msg(struct cmsg *msg);
+net_send_msg(struct net_call *msg);
 
 static void
-tx_process_join_subscribe(struct cmsg *msg);
+tx_process_join_subscribe(struct net_call *msg);
 static void
-net_end_join_subscribe(struct cmsg *msg);
+net_end_join_subscribe(struct net_call *msg);
+
+/**
+ * Cleanup the net thread resources of a connection
+ * and close the connection.
+ */
+static void
+net_finish_disconnect(struct net_call *m)
+{
+	struct iproto_msg *msg = (struct iproto_msg *) m;
+	/* Runs the trigger, which may yield. */
+	iproto_connection_delete(msg->connection);
+	iproto_msg_delete(msg);
+}
 
 /**
  * Fire on_disconnect triggers in the tx
@@ -316,7 +325,7 @@ net_end_join_subscribe(struct cmsg *msg);
  * as well as output buffers of the connection.
  */
 static void
-tx_process_disconnect(struct cmsg *m)
+tx_process_disconnect(struct net_call *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
 	struct iproto_connection *con = msg->connection;
@@ -332,22 +341,11 @@ tx_process_disconnect(struct cmsg *m)
 	 */
 	obuf_destroy(&con->iobuf[0]->out);
 	obuf_destroy(&con->iobuf[1]->out);
+	m->call = net_finish_disconnect;
+	sbus_put(net_route, m);
 }
 
-/**
- * Cleanup the net thread resources of a connection
- * and close the connection.
- */
-static void
-net_finish_disconnect(struct cmsg *m)
-{
-	struct iproto_msg *msg = (struct iproto_msg *) m;
-	/* Runs the trigger, which may yield. */
-	iproto_connection_delete(msg->connection);
-	iproto_msg_delete(msg);
-}
-
-static const struct cmsg_hop disconnect_route[] = {
+/*static const struct cmsg_hop disconnect_route[] = {
 	{ tx_process_disconnect, &net_pipe },
 	{ net_finish_disconnect, NULL },
 };
@@ -365,25 +363,42 @@ static const struct cmsg_hop select_route[] = {
 static const struct cmsg_hop process1_route[] = {
 	{ tx_process1, &net_pipe },
 	{ net_send_msg, NULL },
-};
+};*/
 
-static const struct cmsg_hop *dml_route[IPROTO_TYPE_STAT_MAX] = {
-	NULL,                                   /* IPROTO_OK */
-	select_route,                           /* IPROTO_SELECT */
-	process1_route,                         /* IPROTO_INSERT */
-	process1_route,                         /* IPROTO_REPLACE */
-	process1_route,                         /* IPROTO_UPDATE */
-	process1_route,                         /* IPROTO_DELETE */
-	misc_route,                             /* IPROTO_CALL_16 */
-	misc_route,                             /* IPROTO_AUTH */
-	misc_route,                             /* IPROTO_EVAL */
-	process1_route,                         /* IPROTO_UPSERT */
-	misc_route                              /* IPROTO_CALL */
+/*static const struct cmsg_hop *dml_route[IPROTO_TYPE_STAT_MAX] = {
+	NULL,                                   / * IPROTO_OK * /
+	select_route,                           / * IPROTO_SELECT * /
+	process1_route,                         / * IPROTO_INSERT * /
+	process1_route,                         / * IPROTO_REPLACE * /
+	process1_route,                         / * IPROTO_UPDATE * /
+	process1_route,                         / * IPROTO_DELETE * /
+	misc_route,                             / * IPROTO_CALL_16 * /
+	misc_route,                             / * IPROTO_AUTH * /
+	misc_route,                             / * IPROTO_EVAL * /
+	process1_route,                         / * IPROTO_UPSERT * /
+	misc_route                              / * IPROTO_CALL * /
 };
 
 static const struct cmsg_hop sync_route[] = {
 	{ tx_process_join_subscribe, &net_pipe },
 	{ net_end_join_subscribe, NULL },
+};
+*/
+
+typedef void (*net_handler)(struct net_call *);
+
+static const net_handler dml_route[IPROTO_TYPE_STAT_MAX] = {
+	NULL,
+	tx_process_select,
+	tx_process1,
+	tx_process1,
+	tx_process1,
+	tx_process1,
+	tx_process_misc,
+	tx_process_misc,
+	tx_process_misc,
+	tx_process1,
+	tx_process_misc
 };
 
 static struct iproto_connection *
@@ -403,7 +418,8 @@ iproto_connection_new(const char *name, int fd)
 	rlist_create(&con->in_stop_list);
 	/* It may be very awkward to allocate at close. */
 	con->disconnect = iproto_msg_new(con);
-	cmsg_init(con->disconnect, disconnect_route);
+	con->disconnect->call = tx_process_disconnect;
+	con->disconnect->call_arg = con->disconnect;
 	return con;
 }
 
@@ -448,7 +464,7 @@ iproto_connection_close(struct iproto_connection *con)
 		assert(con->disconnect != NULL);
 		struct iproto_msg *msg = con->disconnect;
 		con->disconnect = NULL;
-		cpipe_push(&tx_pipe, msg);
+		sbus_put(tx_route, msg);
 	}
 	rlist_del(&con->in_stop_list);
 }
@@ -581,14 +597,17 @@ iproto_decode_msg(struct iproto_msg *msg, const char **pos, const char *reqend,
 				 (const char *) msg->header.body[0].iov_base,
 				 msg->header.body[0].iov_len);
 		assert(msg->header.type < sizeof(dml_route)/sizeof(*dml_route));
-		cmsg_init(msg, dml_route[msg->header.type]);
+		msg->call = dml_route[msg->header.type];
+		msg->call_arg = msg;
 		break;
 	case IPROTO_PING:
-		cmsg_init(msg, misc_route);
+		msg->call = tx_process_misc;
+		msg->call_arg = msg;
 		break;
 	case IPROTO_JOIN:
 	case IPROTO_SUBSCRIBE:
-		cmsg_init(msg, sync_route);
+		msg->call = tx_process_join_subscribe;
+		msg->call_arg = msg;
 		*stop_input = true;
 		break;
 	default:
@@ -625,7 +644,7 @@ iproto_enqueue_batch(struct iproto_connection *con, struct ibuf *in)
 
 		try {
 			iproto_decode_msg(msg, &pos, reqend, &stop_input);
-			cpipe_push_input(&tx_pipe, guard.release());
+			sbus_put_start(tx_route, guard.release());
 		} catch (Exception *e) {
 			/*
 			 * Do not close connection if we failed to
@@ -669,7 +688,7 @@ iproto_enqueue_batch(struct iproto_connection *con, struct ibuf *in)
 		 */
 		ev_feed_event(con->loop, &con->input, EV_READ);
 	}
-	cpipe_flush_input(&tx_pipe);
+	sbus_put_done(tx_route);
 }
 
 static void
@@ -850,7 +869,7 @@ tx_check_schema(uint32_t schema_id)
 }
 
 static void
-tx_process1(struct cmsg *m)
+tx_process1(struct net_call *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
 	struct obuf *out = &msg->iobuf->out;
@@ -869,15 +888,19 @@ tx_process1(struct cmsg *m)
 	iproto_reply_select(out, &svp, msg->header.sync,
 			    tuple != 0);
 	msg->write_end = obuf_create_svp(out);
+	msg->call = net_send_msg;
+	sbus_put(net_route, msg);
 	return;
 error:
 	iproto_reply_error(out, diag_last_error(&fiber()->diag),
 			   msg->header.sync);
 	msg->write_end = obuf_create_svp(out);
+	msg->call = net_send_msg;
+	sbus_put(net_route, msg);
 }
 
 static void
-tx_process_select(struct cmsg *m)
+tx_process_select(struct net_call *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
 	struct obuf *out = &msg->iobuf->out;
@@ -903,15 +926,19 @@ tx_process_select(struct cmsg *m)
 	port_dump(&port, out);
 	iproto_reply_select(out, &svp, msg->header.sync, port.size);
 	msg->write_end = obuf_create_svp(out);
+	msg->call = net_send_msg;
+	sbus_put(net_route, msg);
 	return;
 error:
 	iproto_reply_error(out, diag_last_error(&fiber()->diag),
 			   msg->header.sync);
 	msg->write_end = obuf_create_svp(out);
+	msg->call = net_send_msg;
+	sbus_put(net_route, msg);
 }
 
 static void
-tx_process_misc(struct cmsg *m)
+tx_process_misc(struct net_call *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
 	struct obuf *out = &msg->iobuf->out;
@@ -950,15 +977,19 @@ tx_process_misc(struct cmsg *m)
 				   msg->header.sync);
 	}
 	msg->write_end = obuf_create_svp(out);
+	msg->call = net_send_msg;
+	sbus_put(net_route, msg);
 	return;
 error:
 	iproto_reply_error(out, diag_last_error(&fiber()->diag),
 			   msg->header.sync);
 	msg->write_end = obuf_create_svp(out);
+	msg->call = net_send_msg;
+	sbus_put(net_route, msg);
 }
 
 static void
-tx_process_join_subscribe(struct cmsg *m)
+tx_process_join_subscribe(struct net_call *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
 	struct iproto_connection *con = msg->connection;
@@ -992,10 +1023,12 @@ tx_process_join_subscribe(struct cmsg *m)
 	} catch (Exception *e) {
 		iproto_write_error(con->input.fd, e);
 	}
+	msg->call = net_end_join_subscribe;
+	sbus_put(net_route, msg);
 }
 
 static void
-net_send_msg(struct cmsg *m)
+net_send_msg(struct net_call *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
 	struct iproto_connection *con = msg->connection;
@@ -1014,7 +1047,7 @@ net_send_msg(struct cmsg *m)
 }
 
 static void
-net_end_join_subscribe(struct cmsg *m)
+net_end_join_subscribe(struct net_call *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
 	struct iproto_connection *con = msg->connection;
@@ -1031,13 +1064,16 @@ net_end_join_subscribe(struct cmsg *m)
 	iproto_enqueue_batch(con, &iobuf->in);
 }
 
+static void
+net_send_greeting(struct net_call *m);
+
 /**
  * Handshake a connection: invoke the on-connect trigger
  * and possibly authenticate. Try to send the client an error
  * upon a failure.
  */
 static void
-tx_process_connect(struct cmsg *m)
+tx_process_connect(struct net_call *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
 	struct iproto_connection *con = msg->connection;
@@ -1057,6 +1093,8 @@ tx_process_connect(struct cmsg *m)
 		iproto_reply_error(out, e, 0 /* zero sync for connect error */);
 		msg->close_connection = true;
 	}
+	msg->call = net_send_greeting;
+	sbus_put(net_route, msg);
 }
 
 /**
@@ -1064,7 +1102,7 @@ tx_process_connect(struct cmsg *m)
  * connection in case on_connect trigger failed.
  */
 static void
-net_send_greeting(struct cmsg *m)
+net_send_greeting(struct net_call *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
 	struct iproto_connection *con = msg->connection;
@@ -1096,10 +1134,10 @@ net_send_greeting(struct cmsg *m)
 	iproto_msg_delete(msg);
 }
 
-static const struct cmsg_hop connect_route[] = {
+/*static const struct cmsg_hop connect_route[] = {
 	{ tx_process_connect, &net_pipe },
 	{ net_send_greeting, NULL },
-};
+};*/
 
 /** }}} */
 
@@ -1123,10 +1161,11 @@ iproto_on_accept(struct evio_service * /* service */, int fd,
 	 * use, all stored in just a few blocks of the memory pool.
 	 */
 	struct iproto_msg *msg = iproto_msg_new(con);
-	cmsg_init(msg, connect_route);
 	msg->iobuf = con->iobuf[0];
 	msg->close_connection = false;
-	cpipe_push(&tx_pipe, msg);
+	msg->call = tx_process_connect;
+	msg->call_arg = msg;
+	sbus_put(tx_route, msg);
 }
 
 static struct evio_service binary; /* iproto binary listener */
@@ -1157,13 +1196,26 @@ net_cord_f(va_list /* ap */)
 			  "rmean", "struct rmean");
 	}
 
-	cbus_join(&net_tx_bus, &net_pipe);
+	struct sbus_wake_ctx wake_ctx;
+	sbus_wake_init(&wake_ctx, fiber());
+	struct sbus_peak *net_peak;
+	net_peak = sbus_attach_lock(sbus, (char *)"net",
+				    sbus_wake_cb, &wake_ctx);
+
+	tx_route = sbus_route_lock(sbus, (char *)"main", 64);
 	/*
 	 * Nothing to do in the fiber so far, the service
 	 * will take care of creating events for incoming
 	 * connections.
 	 */
-	fiber_yield();
+	while (!fiber_is_cancelled()) {
+		struct net_call *call;
+		while ((call = (struct net_call *)sbus_get(net_peak))) {
+			call->call(call->call_arg);
+		}
+		fiber_yield();
+	}
+
 	if (evio_service_is_active(&binary))
 		evio_service_stop(&binary);
 
@@ -1177,18 +1229,11 @@ iproto_init()
 {
 	tx_cord = cord();
 
-	cbus_create(&net_tx_bus);
-	rmean_net_tx_bus = net_tx_bus.stats;
-	cpipe_create(&tx_pipe);
-	cpipe_set_max_input(&tx_pipe, IPROTO_MSG_MAX/2);
-	cpipe_create(&net_pipe);
-	cpipe_set_max_input(&net_pipe, IPROTO_MSG_MAX/2);
-
 	static struct cord net_cord;
 	if (cord_costart(&net_cord, "iproto", net_cord_f, NULL))
 		panic("failed to initialize iproto thread");
 
-	cbus_join(&net_tx_bus, &tx_pipe);
+	net_route = sbus_route_lock(sbus, (char *)"net", 64);
 }
 
 /**
@@ -1197,7 +1242,7 @@ iproto_init()
  * we need to bounce a couple of messages to and
  * from this thread.
  */
-struct iproto_set_listen_msg: public cmsg
+struct iproto_set_listen_msg: net_call
 {
 	/**
 	 * If there was an error setting the listen port,
@@ -1213,8 +1258,16 @@ struct iproto_set_listen_msg: public cmsg
 	 * The way to tell the caller about the end of
 	 * bind.
 	 */
-	struct cmsg_notify wakeup;
+	struct fiber *fiber;
 };
+
+static void
+iproto_bind_done(struct net_call *arg)
+{
+	struct iproto_set_listen_msg *msg =
+		(struct iproto_set_listen_msg *) arg;
+	fiber_wakeup(msg->fiber);
+}
 
 /**
  * The bind has finished, notify the caller.
@@ -1222,11 +1275,14 @@ struct iproto_set_listen_msg: public cmsg
 static void
 iproto_on_bind(void *arg)
 {
-	cpipe_push(&tx_pipe, (struct cmsg *) arg);
+	struct iproto_set_listen_msg *msg =
+		(struct iproto_set_listen_msg *) arg;
+	msg->call = iproto_bind_done;
+	sbus_put(tx_route, arg);
 }
 
 static void
-iproto_do_set_listen(struct cmsg *m)
+iproto_do_set_listen(struct net_call *m)
 {
 	struct iproto_set_listen_msg *msg =
 		(struct iproto_set_listen_msg *) m;
@@ -1236,14 +1292,14 @@ iproto_do_set_listen(struct cmsg *m)
 
 		if (msg->uri != NULL) {
 			binary.on_bind = iproto_on_bind;
-			binary.on_bind_param = &msg->wakeup;
+			binary.on_bind_param = msg;
 			evio_service_start(&binary, msg->uri);
 		} else {
-			iproto_on_bind(&msg->wakeup);
+			iproto_on_bind(msg);
 		}
 	} catch (Exception *e) {
 		diag_move(&fiber()->diag, &msg->diag);
-		iproto_on_bind(&msg->wakeup);
+		iproto_on_bind(msg);
 	}
 }
 
@@ -1251,12 +1307,11 @@ static void
 iproto_set_listen_msg_init(struct iproto_set_listen_msg *msg,
 			    const char *uri)
 {
-	static cmsg_hop route[] = { { iproto_do_set_listen, NULL }, };
-	cmsg_init(msg, route);
+	msg->call = iproto_do_set_listen;
+	msg->call_arg = msg;
 	msg->uri = uri;
+	msg->fiber = fiber();
 	diag_create(&msg->diag);
-
-	cmsg_notify_init(&msg->wakeup);
 }
 
 void
@@ -1274,7 +1329,7 @@ iproto_set_listen(const char *uri)
 	static struct iproto_set_listen_msg msg;
 	iproto_set_listen_msg_init(&msg, uri);
 
-	cpipe_push(&net_pipe, &msg);
+	sbus_put(net_route, &msg);
 	/** Wait for the end of bind. */
 	fiber_yield();
 	if (! diag_is_empty(&msg.diag)) {
