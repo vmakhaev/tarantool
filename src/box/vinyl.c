@@ -71,6 +71,8 @@
 #include "xlog.h"
 #include "fio.h"
 
+#include "txn.h" /* too_long_threshold */
+
 #define HEAP_FORWARD_DECLARATION
 #include "salad/heap.h"
 
@@ -291,6 +293,7 @@ static void
 vy_quota_use(struct vy_quota *q, int64_t size,
 	     struct ipc_cond *no_quota_cond)
 {
+	ev_tstamp start = ev_now(loop());
 	q->used += size;
 	while (q->enable) {
 		if (q->used >= q->watermark)
@@ -298,6 +301,10 @@ vy_quota_use(struct vy_quota *q, int64_t size,
 		if (q->used < q->limit)
 			break;
 		ipc_cond_wait(&q->cond);
+	}
+	ev_tstamp stop = ev_now(loop());
+	if (stop - start > too_long_threshold) {
+		say_warn("too long vinyl quota: %.3f sec", stop - start);
 	}
 }
 
@@ -7315,10 +7322,18 @@ vy_run_iterator_load_page(struct vy_run_iterator *itr, uint32_t page_no,
 		task->env = index->env;
 		task->page = NULL;
 
+		ev_tstamp start = ev_now(loop()), stop;
+
 		/* Post task to coeio */
 		rc = coio_task_post(&task->base, TIMEOUT_INFINITY);
 		if (rc < 0)
 			return -1; /* timed out or cancelled */
+
+		stop = ev_now(loop());
+		if (stop - start > too_long_threshold) {
+			say_warn("too long page read: %.3f sec",
+				 stop - start);
+		}
 
 		/* task was posted to worker and finished */
 		page = task->page;

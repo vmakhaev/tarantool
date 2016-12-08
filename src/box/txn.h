@@ -40,6 +40,8 @@ extern "C" {
 /** box statistics */
 extern struct rmean *rmean_box;
 
+extern double too_long_threshold;
+
 #if defined(__cplusplus)
 } /* extern "C" */
 
@@ -48,7 +50,6 @@ extern struct rmean *rmean_box;
 #include "fiber.h"
 #include "salad/stailq.h"
 
-extern double too_long_threshold;
 struct tuple;
 
 /**

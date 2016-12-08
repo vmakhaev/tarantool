@@ -123,6 +123,7 @@ process_rw(struct request *request, struct space *space, struct tuple **result)
 {
 	assert(iproto_type_is_dml(request->type));
 	rmean_collect(rmean_box, request->type, 1);
+	ev_tstamp start = ev_now(loop());
 	try {
 		struct txn *txn = txn_begin_stmt(space);
 		access_check_space(space, PRIV_W);
@@ -132,8 +133,6 @@ process_rw(struct request *request, struct space *space, struct tuple **result)
 		case IPROTO_REPLACE:
 			tuple = space->handler->executeReplace(txn, space,
 							       request);
-
-
 			break;
 		case IPROTO_UPDATE:
 			tuple = space->handler->executeUpdate(txn, space,
@@ -180,6 +179,19 @@ process_rw(struct request *request, struct space *space, struct tuple **result)
 	} catch (Exception *e) {
 		txn_rollback_stmt();
 		throw;
+	}
+
+	ev_tstamp stop = ev_now(loop());
+	if (stop - start > too_long_threshold) {
+		const char *mp = request->key != NULL ?
+			request->key : request->tuple;
+		assert(mp != NULL);
+		char *mpstr = tt_static_buf();
+		mp_snprint(mpstr, TT_STATIC_BUF_LEN, mp);
+		say_warn("too long %s in space %s (%s): %.3f sec, %s",
+			 iproto_type_name(request->type),
+			 space->def.name, space->def.engine_name,
+			 stop - start, mpstr);
 	}
 }
 
