@@ -94,6 +94,9 @@ public:
 	virtual struct tuple *
 	iterator_next(struct vy_tx *tx, struct vinyl_iterator *it) const;
 
+	virtual void
+	buildInfo(void *ctx) const override;
+
 public:
 	struct vy_env *env;
 	struct vy_index *db;

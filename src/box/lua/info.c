@@ -360,3 +360,79 @@ box_lua_info_init(struct lua_State *L)
 
 	lua_pop(L, 1); /* info module */
 }
+
+void
+info_begin_str(void *ctx, const char *name)
+{
+	struct lua_State *L = (struct lua_State *) ctx;
+	lua_pushstring(L, name);
+	lua_newtable(L);
+}
+
+void
+info_begin_u64(void *ctx, uint64_t val)
+{
+	struct lua_State *L = (struct lua_State *) ctx;
+	luaL_pushuint64(L, val);
+	lua_newtable(L);
+}
+
+void
+info_begin_u32(void *ctx, uint32_t val)
+{
+	struct lua_State *L = (struct lua_State *) ctx;
+	lua_pushnumber(L, val);
+	lua_newtable(L);
+}
+
+void
+info_end(void *ctx)
+{
+	struct lua_State *L = (struct lua_State *) ctx;
+	lua_settable(L, -3);
+}
+
+void
+info_push_str(void *ctx, const char *name, const char *val)
+{
+	struct lua_State *L = (struct lua_State *) ctx;
+	lua_pushstring(L, name);
+	lua_pushstring(L, val);
+	lua_settable(L, -3);
+}
+
+void
+info_push_u32(void *ctx, const char *name, uint32_t val)
+{
+	struct lua_State *L = (struct lua_State *) ctx;
+	lua_pushstring(L, name);
+	lua_pushnumber(L, val);
+	lua_settable(L, -3);
+}
+
+void
+info_push_u64(void *ctx, const char *name, uint64_t val)
+{
+	struct lua_State *L = (struct lua_State *) ctx;
+	lua_pushstring(L, name);
+	luaL_pushuint64(L, val);
+	lua_settable(L, -3);
+}
+
+void
+info_push_i64(void *ctx, const char *name, int64_t val)
+{
+	struct lua_State *L = (struct lua_State *) ctx;
+	lua_pushstring(L, name);
+	lua_pushinteger(L, val);
+	lua_settable(L, -3);
+}
+
+void
+info_push_bool(void *ctx, const char *name, bool f)
+{
+	struct lua_State *L = (struct lua_State *) ctx;
+	lua_pushstring(L, name);
+	lua_pushboolean(L, f);
+	lua_settable(L, -3);
+}

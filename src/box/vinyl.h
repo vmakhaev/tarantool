@@ -168,6 +168,16 @@ int
 vy_index_open(struct vy_index *index);
 
 /**
+ * Build a lua table with information about the specified vinyl
+ * index.
+ * @param ctx   lua_State - use it as first argument in all
+ *              info_push/begin...() functions.
+ * @param index Index about which need info.
+ */
+void
+vy_index_info(void *ctx, struct vy_index *index);
+
+/**
  * Close index and drop all data
  */
 int

@@ -47,6 +47,7 @@
 #include "space.h"
 #include "txn.h"
 #include "vinyl.h"
+#include "info.h"
 
 struct vinyl_iterator {
 	struct iterator base;
@@ -126,6 +127,46 @@ VinylIndex::count(enum iterator_type type, const char *key,
 	while ((tuple = it->next(it)) != NULL)
 		++count;
 	return count;
+}
+
+void
+VinylIndex::buildInfo(void *ctx) const
+{
+	/* iid: {                         */
+	info_begin_u32(ctx, key_def->iid);
+
+	/*     'unique': boolean,         */
+	info_push_bool(ctx, "unique", key_def->opts.is_unique);
+
+	/*     'type': string,            */
+	info_push_str(ctx, "type", index_type_strs[key_def->type]);
+
+	/*     'name': string,            */
+	info_push_str(ctx, "name", key_def->name);
+
+	/*     'parts': [,                */
+	info_begin_str(ctx, "parts");
+	for (uint32_t j = 0; j < key_def->part_count; j++) {
+		/* i: {                   */
+		info_begin_u32(ctx, j + 1);
+
+		/*     'type': string,    */
+		info_push_str(ctx, "type",
+			      field_type_strs[key_def->parts[j].type]);
+
+		/*     'fieldno': number, */
+		info_push_u32(ctx, "fieldno", key_def->parts[j].fieldno + 1);
+
+		info_end(ctx);
+		/* }                      */
+	}
+	info_end(ctx);
+	/*     ],                         */
+
+	vy_index_info(ctx, db);
+
+	info_end(ctx);
+	/* }                              */
 }
 
 VinylPrimaryIndex::VinylPrimaryIndex(struct vy_env *env_arg,

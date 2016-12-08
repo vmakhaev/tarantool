@@ -961,6 +961,9 @@ function box.schema.space.bless(space)
         check_index(space, 0)
         return space.index[0]:delete(key)
     end
+    space_mt.info = function(space)
+        return internal.space_info(space.id)
+    end
 -- Assumes that spaceno has a TREE (NUM) primary key
 -- inserts a tuple after getting the next value of the
 -- primary key and returns it back to the user

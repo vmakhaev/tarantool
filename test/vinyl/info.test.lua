@@ -22,17 +22,22 @@ for _, v in ipairs({ 'path', 'build', 'tx_latency', 'cursor_latency',
 end;
 test_run:cmd("setopt delimiter ''");
 box.snapshot()
+space:info().indexes
 box_info_sort(box.info.vinyl())
 test_run:cmd("clear filter")
 
 space:drop()
 
 test_run:cmd("setopt delimiter ';'")
+infos = {}
 for i = 1, 16 do
 	c = box.schema.space.create('i'..i, { engine='vinyl' })
 	c:create_index('pk')
+	infos[i] = c:info().indexes
+	infos[i].on_replace = nil
 end;
-box_info_sort(box.info.vinyl().db);
+infos;
+
 for i = 1, 16 do
 	box.space['i'..i]:drop()
 end;

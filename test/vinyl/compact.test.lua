@@ -4,7 +4,7 @@ fiber = require('fiber')
 space = box.schema.space.create("vinyl", { engine = 'vinyl' })
 _= space:create_index('primary', { parts = { 1, 'unsigned' }, compact_wm = 3 })
 
-function vyinfo() return box.info.vinyl().db[box.space.vinyl.id..'/0'] end
+function vyinfo() return box.space.vinyl:info().indexes[0].vinyl end
 
 vyinfo().run_count == 0
 

@@ -44,8 +44,4 @@ box_lua_info_init(struct lua_State *L);
 } /* extern "C" */
 #endif /* defined(__cplusplus) */
 
-#if defined(__cplusplus)
-} /* extern "C" */
-#endif /* defined(__cplusplus) */
-
 #endif /* INCLUDES_TARANTOOL_LUA_INFO_H */

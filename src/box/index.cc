@@ -37,6 +37,7 @@
 #include "iproto_constants.h"
 #include "txn.h"
 #include "rmean.h"
+#include "info.h"
 
 const char *iterator_type_strs[] = {
 	/* [ITER_EQ]  = */ "EQ",
@@ -289,6 +290,48 @@ Index::destroyReadViewForIterator(struct iterator *iterator)
 {
 	(void) iterator;
 	tnt_raise(UnsupportedIndexFeature, this, "consistent read view");
+}
+
+void
+Index::buildInfo(void *ctx) const
+{
+	/* iid: {                         */
+	info_begin_u32(ctx, key_def->iid);
+
+	/*     'unique': boolean,         */
+	if (key_def->type == HASH || key_def->type == TREE) {
+		info_push_bool(ctx, "unique", key_def->opts.is_unique);
+	} else if (key_def->type == RTREE) {
+		info_push_u32(ctx, "unique", key_def->opts.dimension);
+	}
+
+	/*     'type': string,            */
+	info_push_str(ctx, "type", index_type_strs[key_def->type]);
+
+	/*     'name': string,            */
+	info_push_str(ctx, "name", key_def->name);
+
+	/*     'parts': [,                */
+	info_begin_str(ctx, "parts");
+	for (uint32_t j = 0; j < key_def->part_count; j++) {
+		/* i: {                   */
+		info_begin_u32(ctx, j + 1);
+
+		/*     'type': string,    */
+		info_push_str(ctx, "type",
+			      field_type_strs[key_def->parts[j].type]);
+
+		/*     'fieldno': number, */
+		info_push_u32(ctx, "fieldno", key_def->parts[j].fieldno + 1);
+
+		info_end(ctx);
+		/* }                      */
+	}
+	info_end(ctx);
+	/*    ]                           */
+
+	info_end(ctx);
+	/* }                              */
 }
 
 static inline Index *

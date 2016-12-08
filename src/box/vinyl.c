@@ -70,6 +70,7 @@
 #include "xrow.h"
 #include "xlog.h"
 #include "fio.h"
+#include "info.h"
 
 #define HEAP_FORWARD_DECLARATION
 #include "salad/heap.h"
@@ -5365,35 +5366,9 @@ vy_info_append_metric(struct vy_env *env, struct vy_info_handler *h)
 	vy_info_table_end(h);
 }
 
-static void
-vy_info_append_indices(struct vy_env *env, struct vy_info_handler *h)
-{
-	struct vy_index *i;
-	char buf[1024];
-
-	vy_info_table_begin(h, "db");
-	rlist_foreach_entry(i, &env->indexes, link) {
-		vy_info_table_begin(h, i->name);
-		vy_info_append_u64(h, "range_size", i->key_def->opts.range_size);
-		vy_info_append_u64(h, "page_size", i->key_def->opts.page_size);
-		vy_info_append_u64(h, "memory_used", i->used);
-		vy_info_append_u64(h, "size", i->size);
-		vy_info_append_u64(h, "count", i->stmt_count);
-		vy_info_append_u32(h, "page_count", i->page_count);
-		vy_info_append_u32(h, "range_count", i->range_count);
-		vy_info_append_u32(h, "run_count", i->run_count);
-		vy_info_append_u32(h, "run_avg", i->run_count / i->range_count);
-		histogram_snprint(buf, sizeof(buf), i->run_hist);
-		vy_info_append_str(h, "run_histogram", buf);
-		vy_info_table_end(h);
-	}
-	vy_info_table_end(h);
-}
-
 void
 vy_info_gather(struct vy_env *env, struct vy_info_handler *h)
 {
-	vy_info_append_indices(env, h);
 	vy_info_append_global(env, h);
 	vy_info_append_memory(env, h);
 	vy_info_append_metric(env, h);
@@ -5665,6 +5640,75 @@ size_t
 vy_index_bsize(struct vy_index *index)
 {
 	return index->used;
+}
+
+void
+vy_index_info(void *ctx, struct vy_index *index)
+{
+	struct key_def *def = index->key_def;
+
+	/* 'vinyl': {                       */
+	info_begin_str(ctx, "vinyl");
+
+	/*     'range_size': number,        */
+	info_push_u64(ctx, "range_size", def->opts.range_size);
+
+	/*     'page_size': number,         */
+	info_push_u64(ctx, "page_size", def->opts.page_size);
+
+	/*     'memory_used': number,       */
+	info_push_u64(ctx, "memory_used", index->used);
+
+	/*     'size': number,              */
+	info_push_u64(ctx, "size", index->size);
+
+	/*     'count': number,             */
+	info_push_u64(ctx, "count", index->stmt_count);
+
+	/*     'page_count': number,        */
+	info_push_u32(ctx, "page_count", index->page_count);
+
+	/*     'range_count': number,       */
+	info_push_u32(ctx, "range_count", index->range_count);
+
+	/*     'run_count': number,         */
+	info_push_u32(ctx, "run_count", index->run_count);
+
+	/*     'run_avg': number,           */
+	info_push_u32(ctx, "run_avg", index->run_count / index->range_count);
+
+	/*     'histogram': [               */
+	info_begin_str(ctx, "histogram");
+	struct histogram *hist = index->run_hist;
+	for (size_t i = 0, k = 0; i < hist->n_buckets; ++i) {
+		int64_t count = hist->buckets[i].count;
+		if (count == 0)
+			continue;
+
+		int64_t min = (i > 0) ? hist->buckets[i - 1].max + 1 : 0;
+		int64_t max = hist->buckets[i].max;
+
+		/*     k: {                 */
+		info_begin_u32(ctx, ++k);
+
+		/*         'min': number,   */
+		info_push_i64(ctx, "min", min);
+
+		/*         'max': number,   */
+		if (max != min)
+			info_push_i64(ctx, "max", max);
+
+		/*         'count': number, */
+		info_push_i64(ctx, "count", count);
+
+		info_end(ctx);
+		/*     }                    */
+	}
+	info_end(ctx);
+	/*     ]                            */
+
+	info_end(ctx);
+	/* }                                */
 }
 
 /* {{{ Statements */

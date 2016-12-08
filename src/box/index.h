@@ -361,6 +361,14 @@ public:
 	 * for which createReadViewForIterator() was called.
 	 */
 	virtual void destroyReadViewForIterator(struct iterator *iterator);
+
+	/**
+	 * Build a lua table with information about the index.
+	 * @param ctx lua_State, first parameter for all info_begin/push_...()
+	 *            functions.
+	 */
+	virtual void
+	buildInfo(void *ctx) const;
 };
 
 /*

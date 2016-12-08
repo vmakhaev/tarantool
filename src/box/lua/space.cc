@@ -45,6 +45,7 @@ extern "C" {
 #include "box/tuple.h"
 #include "box/txn.h"
 #include "box/vclock.h" /* VCLOCK_MAX */
+#include "box/info.h"
 
 /**
  * Trigger function for all spaces
@@ -278,6 +279,51 @@ box_lua_space_delete(struct lua_State *L, uint32_t id)
 	lua_pop(L, 2); /* box, space */
 }
 
+static int
+lbox_lua_space_info(struct lua_State *L)
+{
+	if (lua_gettop(L) != 1 || !lua_isnumber(L, 1))
+		return luaL_error(L, "Usage space:info()");
+	uint32_t space_id = lua_tointeger(L, 1);
+	struct space *space = space_by_id(space_id);
+	lua_newtable(L);
+	/* {                           */
+
+	/*     'field_count': number,  */
+	info_push_u32(L, "field_count", space->def.exact_field_count);
+
+	/*     'id': number,           */
+	info_push_u32(L, "id", space_id);
+
+	/*     'is_temp': boolean,     */
+	info_push_bool(L, "temporary", space_is_temporary(space));
+
+	/*     'name': string,         */
+	info_push_str(L, "name", space_name(space));
+
+	/*     'engine': string,       */
+	info_push_str(L, "engine", space->def.engine_name);
+
+	/*     'enabled': boolean,     */
+	info_push_bool(L, "enabled", space_index(space, 0) != 0);
+
+        /*     'on_replace': function, */
+        lua_pushstring(L, "on_replace");
+        lua_pushcfunction(L, lbox_space_on_replace);
+        lua_settable(L, -3);
+
+        /*     'indexes': {            */
+        info_begin_str(L, "indexes");
+	for (uint32_t i = 0; i < space->index_count; ++i)  {
+		Index *index = space->index[i];
+		index->buildInfo((void *) L);
+	}
+	info_end(L);
+	/*     }
+	   }                           */
+
+	return 1;
+}
 
 void
 box_lua_space_init(struct lua_State *L)
@@ -335,4 +381,12 @@ box_lua_space_init(struct lua_State *L)
 	lua_pushnumber(L, VCLOCK_MAX);
 	lua_setfield(L, -2, "REPLICA_MAX");
 	lua_pop(L, 2); /* box, schema */
+
+	static const struct luaL_reg boxlib_internal[] = {
+		{"space_info", lbox_lua_space_info},
+		{NULL, NULL}
+	};
+
+	luaL_register(L, "box.internal", boxlib_internal);
+	lua_pop(L, 1);
 }

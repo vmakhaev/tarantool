@@ -58,21 +58,32 @@ box.snapshot()
 ---
 - ok
 ...
+space:info().indexes
+---
+- 0:
+    unique: true
+    parts:
+    - type: string
+      fieldno: 1
+    type: TREE
+    name: primary
+    vinyl:
+      page_size: <size>
+      size: <size>
+      run_avg: <avg>
+      range_count: <count>
+      histogram:
+      - min: 1
+        count: <count>
+      page_count: <count>
+      run_count: <count>
+      memory_used: <used>
+      count: <count>
+      range_size: <size>
+...
 box_info_sort(box.info.vinyl())
 ---
-- - db:
-    - 512/0:
-      - count: <count>
-      - memory_used: <used>
-      - page_count: <count>
-      - page_size: <size>
-      - range_count: <count>
-      - range_size: <size>
-      - run_avg: <avg>
-      - run_count: <count>
-      - run_histogram: <run_histogram>
-      - size: <size>
-  - memory:
+- - memory:
     - limit: 536870912
     - min_lsn: 9223372036854775807
     - ratio: 0%
@@ -130,190 +141,337 @@ test_run:cmd("setopt delimiter ';'")
 ---
 - true
 ...
+infos = {}
 for i = 1, 16 do
 	c = box.schema.space.create('i'..i, { engine='vinyl' })
 	c:create_index('pk')
+	infos[i] = c:info().indexes
+	infos[i].on_replace = nil
 end;
 ---
 ...
-box_info_sort(box.info.vinyl().db);
+infos;
 ---
-- - 513/0:
-    - count: 0
-    - memory_used: 0
-    - page_count: 0
-    - page_size: 1024
-    - range_count: 1
-    - range_size: 65536
-    - run_avg: 0
-    - run_count: 0
-    - run_histogram: '[0]:1'
-    - size: 0
-  - 514/0:
-    - count: 0
-    - memory_used: 0
-    - page_count: 0
-    - page_size: 1024
-    - range_count: 1
-    - range_size: 65536
-    - run_avg: 0
-    - run_count: 0
-    - run_histogram: '[0]:1'
-    - size: 0
-  - 515/0:
-    - count: 0
-    - memory_used: 0
-    - page_count: 0
-    - page_size: 1024
-    - range_count: 1
-    - range_size: 65536
-    - run_avg: 0
-    - run_count: 0
-    - run_histogram: '[0]:1'
-    - size: 0
-  - 516/0:
-    - count: 0
-    - memory_used: 0
-    - page_count: 0
-    - page_size: 1024
-    - range_count: 1
-    - range_size: 65536
-    - run_avg: 0
-    - run_count: 0
-    - run_histogram: '[0]:1'
-    - size: 0
-  - 517/0:
-    - count: 0
-    - memory_used: 0
-    - page_count: 0
-    - page_size: 1024
-    - range_count: 1
-    - range_size: 65536
-    - run_avg: 0
-    - run_count: 0
-    - run_histogram: '[0]:1'
-    - size: 0
-  - 518/0:
-    - count: 0
-    - memory_used: 0
-    - page_count: 0
-    - page_size: 1024
-    - range_count: 1
-    - range_size: 65536
-    - run_avg: 0
-    - run_count: 0
-    - run_histogram: '[0]:1'
-    - size: 0
-  - 519/0:
-    - count: 0
-    - memory_used: 0
-    - page_count: 0
-    - page_size: 1024
-    - range_count: 1
-    - range_size: 65536
-    - run_avg: 0
-    - run_count: 0
-    - run_histogram: '[0]:1'
-    - size: 0
-  - 520/0:
-    - count: 0
-    - memory_used: 0
-    - page_count: 0
-    - page_size: 1024
-    - range_count: 1
-    - range_size: 65536
-    - run_avg: 0
-    - run_count: 0
-    - run_histogram: '[0]:1'
-    - size: 0
-  - 521/0:
-    - count: 0
-    - memory_used: 0
-    - page_count: 0
-    - page_size: 1024
-    - range_count: 1
-    - range_size: 65536
-    - run_avg: 0
-    - run_count: 0
-    - run_histogram: '[0]:1'
-    - size: 0
-  - 522/0:
-    - count: 0
-    - memory_used: 0
-    - page_count: 0
-    - page_size: 1024
-    - range_count: 1
-    - range_size: 65536
-    - run_avg: 0
-    - run_count: 0
-    - run_histogram: '[0]:1'
-    - size: 0
-  - 523/0:
-    - count: 0
-    - memory_used: 0
-    - page_count: 0
-    - page_size: 1024
-    - range_count: 1
-    - range_size: 65536
-    - run_avg: 0
-    - run_count: 0
-    - run_histogram: '[0]:1'
-    - size: 0
-  - 524/0:
-    - count: 0
-    - memory_used: 0
-    - page_count: 0
-    - page_size: 1024
-    - range_count: 1
-    - range_size: 65536
-    - run_avg: 0
-    - run_count: 0
-    - run_histogram: '[0]:1'
-    - size: 0
-  - 525/0:
-    - count: 0
-    - memory_used: 0
-    - page_count: 0
-    - page_size: 1024
-    - range_count: 1
-    - range_size: 65536
-    - run_avg: 0
-    - run_count: 0
-    - run_histogram: '[0]:1'
-    - size: 0
-  - 526/0:
-    - count: 0
-    - memory_used: 0
-    - page_count: 0
-    - page_size: 1024
-    - range_count: 1
-    - range_size: 65536
-    - run_avg: 0
-    - run_count: 0
-    - run_histogram: '[0]:1'
-    - size: 0
-  - 527/0:
-    - count: 0
-    - memory_used: 0
-    - page_count: 0
-    - page_size: 1024
-    - range_count: 1
-    - range_size: 65536
-    - run_avg: 0
-    - run_count: 0
-    - run_histogram: '[0]:1'
-    - size: 0
-  - 528/0:
-    - count: 0
-    - memory_used: 0
-    - page_count: 0
-    - page_size: 1024
-    - range_count: 1
-    - range_size: 65536
-    - run_avg: 0
-    - run_count: 0
-    - run_histogram: '[0]:1'
-    - size: 0
+- - 0:
+      unique: true
+      parts:
+      - type: unsigned
+        fieldno: 1
+      type: TREE
+      name: pk
+      vinyl:
+        page_size: 1024
+        size: 0
+        run_avg: 0
+        range_count: 1
+        histogram:
+        - min: 0
+          count: 1
+        page_count: 0
+        run_count: 0
+        memory_used: 0
+        count: 0
+        range_size: 65536
+  - 0:
+      unique: true
+      parts:
+      - type: unsigned
+        fieldno: 1
+      type: TREE
+      name: pk
+      vinyl:
+        page_size: 1024
+        size: 0
+        run_avg: 0
+        range_count: 1
+        histogram:
+        - min: 0
+          count: 1
+        page_count: 0
+        run_count: 0
+        memory_used: 0
+        count: 0
+        range_size: 65536
+  - 0:
+      unique: true
+      parts:
+      - type: unsigned
+        fieldno: 1
+      type: TREE
+      name: pk
+      vinyl:
+        page_size: 1024
+        size: 0
+        run_avg: 0
+        range_count: 1
+        histogram:
+        - min: 0
+          count: 1
+        page_count: 0
+        run_count: 0
+        memory_used: 0
+        count: 0
+        range_size: 65536
+  - 0:
+      unique: true
+      parts:
+      - type: unsigned
+        fieldno: 1
+      type: TREE
+      name: pk
+      vinyl:
+        page_size: 1024
+        size: 0
+        run_avg: 0
+        range_count: 1
+        histogram:
+        - min: 0
+          count: 1
+        page_count: 0
+        run_count: 0
+        memory_used: 0
+        count: 0
+        range_size: 65536
+  - 0:
+      unique: true
+      parts:
+      - type: unsigned
+        fieldno: 1
+      type: TREE
+      name: pk
+      vinyl:
+        page_size: 1024
+        size: 0
+        run_avg: 0
+        range_count: 1
+        histogram:
+        - min: 0
+          count: 1
+        page_count: 0
+        run_count: 0
+        memory_used: 0
+        count: 0
+        range_size: 65536
+  - 0:
+      unique: true
+      parts:
+      - type: unsigned
+        fieldno: 1
+      type: TREE
+      name: pk
+      vinyl:
+        page_size: 1024
+        size: 0
+        run_avg: 0
+        range_count: 1
+        histogram:
+        - min: 0
+          count: 1
+        page_count: 0
+        run_count: 0
+        memory_used: 0
+        count: 0
+        range_size: 65536
+  - 0:
+      unique: true
+      parts:
+      - type: unsigned
+        fieldno: 1
+      type: TREE
+      name: pk
+      vinyl:
+        page_size: 1024
+        size: 0
+        run_avg: 0
+        range_count: 1
+        histogram:
+        - min: 0
+          count: 1
+        page_count: 0
+        run_count: 0
+        memory_used: 0
+        count: 0
+        range_size: 65536
+  - 0:
+      unique: true
+      parts:
+      - type: unsigned
+        fieldno: 1
+      type: TREE
+      name: pk
+      vinyl:
+        page_size: 1024
+        size: 0
+        run_avg: 0
+        range_count: 1
+        histogram:
+        - min: 0
+          count: 1
+        page_count: 0
+        run_count: 0
+        memory_used: 0
+        count: 0
+        range_size: 65536
+  - 0:
+      unique: true
+      parts:
+      - type: unsigned
+        fieldno: 1
+      type: TREE
+      name: pk
+      vinyl:
+        page_size: 1024
+        size: 0
+        run_avg: 0
+        range_count: 1
+        histogram:
+        - min: 0
+          count: 1
+        page_count: 0
+        run_count: 0
+        memory_used: 0
+        count: 0
+        range_size: 65536
+  - 0:
+      unique: true
+      parts:
+      - type: unsigned
+        fieldno: 1
+      type: TREE
+      name: pk
+      vinyl:
+        page_size: 1024
+        size: 0
+        run_avg: 0
+        range_count: 1
+        histogram:
+        - min: 0
+          count: 1
+        page_count: 0
+        run_count: 0
+        memory_used: 0
+        count: 0
+        range_size: 65536
+  - 0:
+      unique: true
+      parts:
+      - type: unsigned
+        fieldno: 1
+      type: TREE
+      name: pk
+      vinyl:
+        page_size: 1024
+        size: 0
+        run_avg: 0
+        range_count: 1
+        histogram:
+        - min: 0
+          count: 1
+        page_count: 0
+        run_count: 0
+        memory_used: 0
+        count: 0
+        range_size: 65536
+  - 0:
+      unique: true
+      parts:
+      - type: unsigned
+        fieldno: 1
+      type: TREE
+      name: pk
+      vinyl:
+        page_size: 1024
+        size: 0
+        run_avg: 0
+        range_count: 1
+        histogram:
+        - min: 0
+          count: 1
+        page_count: 0
+        run_count: 0
+        memory_used: 0
+        count: 0
+        range_size: 65536
+  - 0:
+      unique: true
+      parts:
+      - type: unsigned
+        fieldno: 1
+      type: TREE
+      name: pk
+      vinyl:
+        page_size: 1024
+        size: 0
+        run_avg: 0
+        range_count: 1
+        histogram:
+        - min: 0
+          count: 1
+        page_count: 0
+        run_count: 0
+        memory_used: 0
+        count: 0
+        range_size: 65536
+  - 0:
+      unique: true
+      parts:
+      - type: unsigned
+        fieldno: 1
+      type: TREE
+      name: pk
+      vinyl:
+        page_size: 1024
+        size: 0
+        run_avg: 0
+        range_count: 1
+        histogram:
+        - min: 0
+          count: 1
+        page_count: 0
+        run_count: 0
+        memory_used: 0
+        count: 0
+        range_size: 65536
+  - 0:
+      unique: true
+      parts:
+      - type: unsigned
+        fieldno: 1
+      type: TREE
+      name: pk
+      vinyl:
+        page_size: 1024
+        size: 0
+        run_avg: 0
+        range_count: 1
+        histogram:
+        - min: 0
+          count: 1
+        page_count: 0
+        run_count: 0
+        memory_used: 0
+        count: 0
+        range_size: 65536
+  - 0:
+      unique: true
+      parts:
+      - type: unsigned
+        fieldno: 1
+      type: TREE
+      name: pk
+      vinyl:
+        page_size: 1024
+        size: 0
+        run_avg: 0
+        range_count: 1
+        histogram:
+        - min: 0
+          count: 1
+        page_count: 0
+        run_count: 0
+        memory_used: 0
+        count: 0
+        range_size: 65536
 ...
 for i = 1, 16 do
 	box.space['i'..i]:drop()

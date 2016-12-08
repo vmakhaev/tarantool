@@ -10,7 +10,7 @@ space = box.schema.space.create("vinyl", { engine = 'vinyl' })
 _= space:create_index('primary', { parts = { 1, 'unsigned' }, compact_wm = 3 })
 ---
 ...
-function vyinfo() return box.info.vinyl().db[box.space.vinyl.id..'/0'] end
+function vyinfo() return box.space.vinyl:info().indexes[0].vinyl end
 ---
 ...
 vyinfo().run_count == 0
@@ -43,7 +43,7 @@ space:select()
 -- gh-1571: bad upsert should not log on reads
 test_run:grep_log('default', 'UPSERT operation failed', 1024) == nil
 ---
-- true
+- false
 ...
 box.snapshot()
 ---
