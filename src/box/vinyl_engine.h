@@ -33,6 +33,7 @@
 #include "engine.h"
 
 struct vy_env;
+struct iterator;
 
 struct VinylEngine: public Engine {
 	VinylEngine();
@@ -58,9 +59,16 @@ struct VinylEngine: public Engine {
 	virtual void join(struct xstream *stream) override;
 	virtual int beginCheckpoint() override;
 	virtual int waitCheckpoint(struct vclock *vclock) override;
+	virtual void commitCheckpoint(struct vclock *vclock) override;
+	virtual void abortCheckpoint() override;
 public:
 	struct vy_env *env;
 	bool recovery_complete;
+private:
+	struct iterator *gc_iter;
+	void gc_iter_init();
+	void gc_iter_destroy();
+	void gc();
 };
 
 #endif /* TARANTOOL_BOX_VINYL_ENGINE_H_INCLUDED */

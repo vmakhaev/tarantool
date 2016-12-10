@@ -79,7 +79,7 @@ box_info_sort(box.info.vinyl())
     - used: <used>
     - watermark: <watermark>
   - metric:
-    - lsn: 5
+    - lsn: 6
   - performance:
     - cursor:
       - rps: <rps>

@@ -522,12 +522,36 @@ local function upgrade_field_types_to_1_7_2()
     end
 end
 
+local function upgrade_vinyl_to_1_7_2()
+    local _space = box.space[box.schema.SPACE_ID]
+    local _index = box.space[box.schema.INDEX_ID]
+    local _vinyl = box.space[box.schema.VINYL_ID]
+    local MAP = setmap({})
+
+    log.info("create space _vinyl")
+    local format = {}
+    format[1] = {name = 'server_uuid', type = 'str'}
+    format[2] = {name = 'run_id', type = 'num'}
+    format[3] = {name = 'space_id', type = 'num'}
+    format[4] = {name = 'index_id', type = 'num'}
+    format[5] = {name = 'index_lsn', type = 'num'}
+    format[6] = {name = 'state', type = 'num'}
+    format[7] = {name = 'begin', type = 'array'}
+    format[8] = {name = 'end', type = 'array'}
+    _space:insert{_vinyl.id, ADMIN, '_vinyl', 'memtx', 0, MAP, format}
+    -- primary key: server id, run id
+    log.info("create index primary on _vinyl")
+    _index:insert{_vinyl.id, 0, 'primary', 'tree', {unique = true},
+                  {{0, 'string'}, {1, 'unsigned'}}}
+end
+
 local function upgrade_to_1_7_2()
     if VERSION_ID >= version_id(1, 7, 2) then
         return
     end
 
     upgrade_field_types_to_1_7_2()
+    upgrade_vinyl_to_1_7_2()
 
     log.info("set schema version to 1.7.2")
     box.space._schema:replace({'version', 1, 7, 2})

@@ -22,7 +22,14 @@ box.schema.upgrade()
 
 box.space._schema:select()
 box.space._space:select()
-box.space._index:select()
+
+-- Filter out options.lsn, which first appeared in 1.7.2
+-- Do not use push filter, because it results in different
+-- line split for 1.7.2
+t = box.space._index:select()
+for i, v in ipairs(t) do local opts = v[5] opts.lsn = nil t[i] = v:update{{'=', 5, opts}} end
+t
+
 box.space._user:select()
 box.space._func:select()
 box.space._priv:select()

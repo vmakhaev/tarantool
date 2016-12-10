@@ -318,6 +318,26 @@ schema_init()
 			 FIELD_TYPE_UNSIGNED);
 	(void) sc_space_new(&def, key_def, &alter_space_on_replace_index);
 	key_def_delete(key_def);
+
+	/* _vinyl - definition of vinyl runs in all indexes */
+	def.id = BOX_VINYL_ID;
+	snprintf(def.name, sizeof(def.name), "_vinyl");
+	key_def = key_def_new(def.id,
+			      0 /* index id */,
+			      "primary",
+			      TREE /* index type */,
+			      &opts,
+			      2); /* part count */
+	if (key_def == NULL)
+		diag_raise();
+	/* server uuid */
+	key_def_set_part(key_def, 0 /* part no */, 0 /* field no */,
+			 FIELD_TYPE_STRING);
+	/* run id */
+	key_def_set_part(key_def, 1 /* part no */, 1 /* field no */,
+			 FIELD_TYPE_UNSIGNED);
+	(void) sc_space_new(&def, key_def, NULL);
+	key_def_delete(key_def);
 }
 
 void

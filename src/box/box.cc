@@ -1360,11 +1360,17 @@ bootstrap_from_master(struct server *master, struct vclock *start_vclock)
 	if (recovery->server_id == SERVER_ID_NIL)
 		panic("server id has not received from master");
 
-	/* Start server vclock using master's vclock */
-	vclock_copy(start_vclock, &applier->vclock);
-
 	/* Finalize the new replica */
 	engine_end_recovery();
+
+	/*
+	 * Start server vclock using master's vclock.
+	 *
+	 * Note, Engine::endRecovery may issue a transaction
+	 * (and in fact it does in case of vinyl), so we may
+	 * copy vclock only after calling engine_end_recvoery().
+	 */
+	vclock_copy(start_vclock, &applier->vclock);
 
 	/* Switch applier to initial state */
 	applier_resume_to_state(applier, APPLIER_CONNECTED, TIMEOUT_INFINITY);
