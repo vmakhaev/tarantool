@@ -9798,49 +9798,65 @@ vy_read_iterator_add_tx(struct vy_read_iterator *itr)
 }
 
 static void
+vy_read_iterator_add_mem_range(struct vy_read_iterator *itr,
+			       struct vy_range *range, bool in_compact)
+{
+	/*
+	 * If the range is being compacted, all its in-memory indexes
+	 * are immutable, because new statements are inserted into the
+	 * range(s) that will replace it when compaction succeeds.
+	 * Otherwise, only the newest in-memory index is mutable.
+	 */
+	bool is_mutable = !in_compact;
+	struct vy_mem *mem;
+	rlist_foreach_entry(mem, &range->mems, link) {
+		struct vy_merge_src *sub_src;
+		sub_src = vy_merge_iterator_add(&itr->merge_iterator,
+						is_mutable, true);
+		vy_mem_iterator_open(&sub_src->mem_iterator, mem,
+				     itr->iterator_type, itr->key, itr->vlsn);
+		is_mutable = false;
+	}
+}
+
+static void
 vy_read_iterator_add_mem(struct vy_read_iterator *itr)
 {
-	assert(itr->curr_range != NULL);
-	assert(itr->curr_range->shadow == NULL);
-	/*
-	 * If the range is under compaction, add in-memory indexes of
-	 * ranges being compacted to it first. They are mutable.
-	 */
-	struct vy_mem *mem;
+	struct vy_range *range = itr->curr_range;
+	assert(range != NULL);
+	assert(range->shadow == NULL);
+	bool in_compact = !rlist_empty(&range->compact_list);
 	struct vy_range *r;
-	rlist_foreach_entry(r, &itr->curr_range->compact_list, compact_list) {
-		struct vy_merge_src *sub_src = vy_merge_iterator_add(
-			&itr->merge_iterator, true, true);
-		mem = rlist_first_entry(&r->mems, struct vy_mem, link);
-		vy_mem_iterator_open(&sub_src->mem_iterator, mem,
-				     itr->iterator_type, itr->key, itr->vlsn);
-	}
-	bool in_compact = !rlist_empty(&itr->curr_range->compact_list);
-	rlist_foreach_entry(mem, &itr->curr_range->mems, link) {
-		/* only the newest range is mutable */
-		bool is_mutable = !in_compact &&
-			mem == rlist_first_entry(&itr->curr_range->mems,
-						 struct vy_mem, link);
-		struct vy_merge_src *sub_src = vy_merge_iterator_add(
-			&itr->merge_iterator, is_mutable, true);
-		vy_mem_iterator_open(&sub_src->mem_iterator, mem,
-				     itr->iterator_type, itr->key, itr->vlsn);
+	rlist_foreach_entry(r, &range->compact_list, compact_list)
+		vy_read_iterator_add_mem_range(itr, r, false);
+	vy_read_iterator_add_mem_range(itr, range, in_compact);
+}
+
+static void
+vy_read_iterator_add_disk_range(struct vy_read_iterator *itr,
+				struct vy_range *range)
+{
+	struct vy_run *run;
+	rlist_foreach_entry(run, &range->runs, link) {
+		struct vy_merge_src *sub_src;
+		sub_src = vy_merge_iterator_add(&itr->merge_iterator,
+						false, true);
+		vy_run_iterator_open(&sub_src->run_iterator, range,
+				     run, itr->iterator_type, itr->key,
+				     itr->vlsn);
 	}
 }
 
 static void
 vy_read_iterator_add_disk(struct vy_read_iterator *itr)
 {
-	assert(itr->curr_range != NULL);
-	assert(itr->curr_range->shadow == NULL);
-	struct vy_run *run;
-	rlist_foreach_entry(run, &itr->curr_range->runs, link) {
-		struct vy_merge_src *sub_src = vy_merge_iterator_add(
-			&itr->merge_iterator, false, true);
-		vy_run_iterator_open(&sub_src->run_iterator, itr->curr_range,
-				     run, itr->iterator_type, itr->key,
-				     itr->vlsn);
-	}
+	struct vy_range *range = itr->curr_range;
+	assert(range != NULL);
+	assert(range->shadow == NULL);
+	struct vy_range *r;
+	rlist_foreach_entry(r, &range->compact_list, compact_list)
+		vy_read_iterator_add_disk_range(itr, r);
+	vy_read_iterator_add_disk_range(itr, range);
 }
 
 /**
