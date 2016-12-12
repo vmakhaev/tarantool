@@ -65,116 +65,22 @@ struct mempool memtx_index_extent_pool;
 static int memtx_index_num_reserved_extents;
 static void *memtx_index_reserved_extents;
 
-enum {
-	/**
-	 * This number is calculated based on the
-	 * max (realistic) number of insertions
-	 * a deletion from a B-tree or an R-tree
-	 * can lead to, and, as a result, the max
-	 * number of new block allocations.
-	 */
-	RESERVE_EXTENTS_BEFORE_DELETE = 8,
-	RESERVE_EXTENTS_BEFORE_REPLACE = 16
-};
-
 static void
 txn_on_yield_or_stop(struct trigger * /* trigger */, void * /* event */)
 {
 	txn_rollback(); /* doesn't throw */
 }
 
-/**
- * A short-cut version of replace() used during bulk load
- * from snapshot.
- */
-static struct tuple *
-memtx_replace_build_next(struct space *space,
-			 struct tuple *old_tuple, struct tuple *new_tuple,
-			 enum dup_replace_mode mode)
-{
-	assert(old_tuple == NULL && mode == DUP_INSERT);
-	(void) mode;
-	if (old_tuple) {
-		/*
-		 * Called from txn_rollback() In practice
-		 * is impossible: all possible checks for tuple
-		 * validity are done before the space is changed,
-		 * and WAL is off, so this part can't fail.
-		 */
-		panic("Failed to commit transaction when loading "
-		      "from snapshot");
-	}
-	((MemtxIndex *) space->index[0])->buildNext(new_tuple);
-	tuple_ref(new_tuple);
-	return NULL;
-}
-
-/**
- * A short-cut version of replace() used when loading
- * data from XLOG files.
- */
-static struct tuple *
-memtx_replace_primary_key(struct space *space, struct tuple *old_tuple,
-			  struct tuple *new_tuple, enum dup_replace_mode mode)
-{
-	old_tuple = space->index[0]->replace(old_tuple, new_tuple, mode);
-	if (new_tuple)
-		tuple_ref(new_tuple);
-	return old_tuple;
-}
-
-static struct tuple *
-memtx_replace_all_keys(struct space *space, struct tuple *old_tuple,
-		       struct tuple *new_tuple, enum dup_replace_mode mode)
-{
-	/*
-	 * Ensure we have enough slack memory to guarantee
-	 * successful statement-level rollback.
-	 */
-	memtx_index_extent_reserve(new_tuple ?
-				   RESERVE_EXTENTS_BEFORE_REPLACE :
-				   RESERVE_EXTENTS_BEFORE_DELETE);
-	uint32_t i = 0;
-	try {
-		/* Update the primary key */
-		Index *pk = index_find(space, 0);
-		assert(pk->key_def->opts.is_unique);
-		/*
-		 * If old_tuple is not NULL, the index
-		 * has to find and delete it, or raise an
-		 * error.
-		 */
-		old_tuple = pk->replace(old_tuple, new_tuple, mode);
-
-		assert(old_tuple || new_tuple);
-		/* Update secondary keys. */
-		for (i++; i < space->index_count; i++) {
-			Index *index = space->index[i];
-			index->replace(old_tuple, new_tuple, DUP_INSERT);
-		}
-	} catch (Exception *e) {
-		/* Rollback all changes */
-		for (; i > 0; i--) {
-			Index *index = space->index[i-1];
-			index->replace(new_tuple, old_tuple, DUP_INSERT);
-		}
-		throw;
-	}
-	if (new_tuple)
-		tuple_ref(new_tuple);
-	return old_tuple;
-}
-
 static void
-memtx_end_build_primary_key(struct space *space, void *param)
+memtx_build_primary_key(struct space *space, void *param)
 {
 	struct MemtxSpace *handler = (struct MemtxSpace *) space->handler;
 	if (handler->engine != param || space_index(space, 0) == NULL ||
-	    handler->replace == memtx_replace_all_keys)
+	    handler->m_state == MEMTX_OK)
 		return;
 
 	((MemtxIndex *) space->index[0])->endBuild();
-	handler->replace = memtx_replace_primary_key;
+	handler->m_state = MEMTX_FINAL_RECOVERY;
 }
 
 /**
@@ -183,12 +89,12 @@ memtx_end_build_primary_key(struct space *space, void *param)
  * Data dictionary spaces are an exception, they are fully
  * built right from the start.
  */
-void
+static void
 memtx_build_secondary_keys(struct space *space, void *param)
 {
 	struct MemtxSpace *handler = (struct MemtxSpace *) space->handler;
 	if (handler->engine != param || space_index(space, 0) == NULL ||
-	    handler->replace == memtx_replace_all_keys)
+	    handler->m_state == MEMTX_OK)
 		return;
 
 	if (space->index_id_max > 0) {
@@ -207,16 +113,16 @@ memtx_build_secondary_keys(struct space *space, void *param)
 			say_info("Space '%s': done", space_name(space));
 		}
 	}
-	handler->replace = memtx_replace_all_keys;
+	handler->m_state = MEMTX_OK;
 }
 
 MemtxEngine::MemtxEngine(const char *snap_dirname, bool panic_on_snap_error,
 			 bool panic_on_wal_error)
 	:Engine("memtx"),
 	m_checkpoint(0),
-	m_state(MEMTX_INITIALIZED),
 	m_snap_io_rate_limit(UINT64_MAX),
-	m_panic_on_wal_error(panic_on_wal_error)
+	m_panic_on_wal_error(panic_on_wal_error),
+	m_state(MEMTX_INITIAL_RECOVERY)
 {
 	flags = ENGINE_CAN_BE_TEMPORARY;
 	xdir_create(&m_snap_dir, snap_dirname, SNAP, &SERVER_UUID);
@@ -328,7 +234,7 @@ void
 MemtxEngine::beginInitialRecovery(struct vclock *vclock)
 {
 	(void) vclock;
-	assert(m_state == MEMTX_INITIALIZED);
+	assert(m_state == MEMTX_INITIAL_RECOVERY);
 	/*
 	 * By default, enable fast start: bulk read of tuples
 	 * from the snapshot, in which they are stored in key
@@ -338,8 +244,8 @@ MemtxEngine::beginInitialRecovery(struct vclock *vclock)
 	 * recovery mode. Enable all keys on start, to detect and
 	 * discard duplicates in the snapshot.
 	 */
-	m_state = (m_snap_dir.panic_if_error ?
-		   MEMTX_INITIAL_RECOVERY : MEMTX_OK);
+	if (m_snap_dir.panic_if_error == false)
+		m_state =  MEMTX_OK;
 }
 
 void
@@ -350,7 +256,7 @@ MemtxEngine::beginFinalRecovery()
 
 	assert(m_state == MEMTX_INITIAL_RECOVERY);
 	/* End of the fast path: loaded the primary key. */
-	space_foreach(memtx_end_build_primary_key, this);
+	space_foreach(memtx_build_primary_key, this);
 
 	if (m_panic_on_wal_error) {
 		/*
@@ -394,27 +300,33 @@ Handler *MemtxEngine::open()
 }
 
 
+/**
+ * Replicate engine state in a newly created space.
+ * This function is invoked when executing a replace into _index
+ * space originating either from a snapshot or from the binary
+ * log. It brings the newly created space up to date with the
+ * engine recovery state: if the event comes from the snapshot,
+ * then the primary key is not built, otherwise it's created
+ * right away.
+ */
 static void
 memtx_add_primary_key(struct space *space, enum memtx_recovery_state state)
 {
 	struct MemtxSpace *handler = (struct MemtxSpace *) space->handler;
 	switch (state) {
-	case MEMTX_INITIALIZED:
-		panic("can't create a new space before snapshot recovery");
-		break;
 	case MEMTX_INITIAL_RECOVERY:
 		((MemtxIndex *) space->index[0])->beginBuild();
-		handler->replace = memtx_replace_build_next;
+		handler->m_state = MEMTX_INITIAL_RECOVERY;
 		break;
 	case MEMTX_FINAL_RECOVERY:
 		((MemtxIndex *) space->index[0])->beginBuild();
 		((MemtxIndex *) space->index[0])->endBuild();
-		handler->replace = memtx_replace_primary_key;
+		handler->m_state = MEMTX_FINAL_RECOVERY;
 		break;
 	case MEMTX_OK:
 		((MemtxIndex *) space->index[0])->beginBuild();
 		((MemtxIndex *) space->index[0])->endBuild();
-		handler->replace = memtx_replace_all_keys;
+		handler->m_state = MEMTX_OK;
 		break;
 	}
 }
@@ -428,8 +340,7 @@ MemtxEngine::addPrimaryKey(struct space *space)
 void
 MemtxEngine::dropPrimaryKey(struct space *space)
 {
-	struct MemtxSpace *handler = (struct MemtxSpace *) space->handler;
-	handler->replace = memtx_replace_no_keys;
+	(void) space;
 }
 
 void
@@ -450,7 +361,7 @@ MemtxEngine::buildSecondaryKey(struct space *old_space,
 	if (new_key_def->iid != 0) {
 		struct MemtxSpace *handler;
 		handler = (struct MemtxSpace *) new_space->handler;
-		if (!(handler->replace == memtx_replace_all_keys))
+		if (handler->m_state != MEMTX_OK)
 			return;
 	}
 	Index *pk = index_find(old_space, 0);
@@ -611,9 +522,9 @@ MemtxEngine::rollbackStatement(struct txn *, struct txn_stmt *stmt)
 	int index_count;
 	struct MemtxSpace *handler = (struct MemtxSpace *) space->handler;
 
-	if (handler->replace == memtx_replace_all_keys)
+	if (handler->m_state == MEMTX_OK)
 		index_count = space->index_count;
-	else if (handler->replace == memtx_replace_primary_key)
+	else if (handler->m_state == MEMTX_FINAL_RECOVERY)
 		index_count = 1;
 	else
 		panic("transaction rolled back during snapshot recovery");
@@ -653,7 +564,7 @@ MemtxEngine::commit(struct txn *txn, int64_t signature)
 void
 MemtxEngine::bootstrap()
 {
-	assert(m_state == MEMTX_INITIALIZED);
+	assert(m_state == MEMTX_INITIAL_RECOVERY);
 	m_state = MEMTX_OK;
 
 	/* Recover from bootstrap.snap */
@@ -671,14 +582,8 @@ MemtxEngine::bootstrap()
 	});
 
 	struct xrow_header row;
-	uint64_t row_count = 0;
-	while (xlog_cursor_next_xc(&cursor, &row, true) == 0) {
+	while (xlog_cursor_next_xc(&cursor, &row, true) == 0)
 		recoverSnapshotRow(&row);
-		++row_count;
-		if (row_count % 100000 == 0)
-			say_info("%.1fM rows processed",
-				 row_count / 1000000.);
-	}
 }
 
 static void

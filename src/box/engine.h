@@ -180,6 +180,9 @@ public:
 
 	virtual void
 	applySnapshotRow(struct space *space, struct request *);
+
+	virtual void
+	applyWalRow(struct space *, struct request *);
 	virtual struct tuple *
 	executeReplace(struct txn *, struct space *,
 		       struct request *);

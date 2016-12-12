@@ -36,6 +36,9 @@ struct VinylSpace: public Handler {
 	VinylSpace(Engine*);
 	virtual void
 	applySnapshotRow(struct space *space, struct request *request) override;
+
+	virtual void
+	applyWalRow(struct space *space, struct request *request) override;
 	virtual struct tuple *
 	executeReplace(struct txn*, struct space *space,
 	               struct request *request) override;

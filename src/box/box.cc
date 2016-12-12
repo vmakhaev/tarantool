@@ -216,10 +216,14 @@ struct wal_stream {
 static void
 apply_wal_row(struct xstream *stream, struct xrow_header *row)
 {
-	apply_row(stream, row);
-
 	struct wal_stream *xstream =
 		container_of(stream, struct wal_stream, base);
+
+	struct request *request = xrow_decode_request(row);
+	struct space *space = space_cache_find(request->space_id);
+	space->handler->applyWalRow(space, request);
+	if (rlist_empty(&space->on_replace))
+		vclock_follow(&::recovery->vclock, row->server_id, row->lsn);
 	/**
 	 * Yield once in a while, but not too often,
 	 * mostly to allow signal handling to take place.

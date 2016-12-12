@@ -42,14 +42,12 @@
  *
  * The states exist to speed up recovery: initial state
  * assumes write-only flow of sorted rows from a snapshot.
- * It's followed by a state for read-write recovery 
+ * It's followed by a state for read-write recovery
  * of rows from the write ahead log; these rows are
  * inserted only into the primary key. The final
  * state is for a fully functional space.
  */
 enum memtx_recovery_state {
-	/** The space has no indexes. */
-	MEMTX_INITIALIZED,
 	/**
 	 * The space has only the primary index, which is in
 	 * write-only bulk insert mode.
@@ -115,7 +113,6 @@ private:
 	recoverSnapshotRow(struct xrow_header *row);
 	/** Non-zero if there is a checkpoint (snapshot) in progress. */
 	struct checkpoint *m_checkpoint;
-	enum memtx_recovery_state m_state;
 	/** The directory where to store snapshots. */
 	struct xdir m_snap_dir;
 	/** Limit disk usage of checkpointing (bytes per second). */
@@ -123,6 +120,8 @@ private:
 	struct vclock m_last_checkpoint;
 	bool m_has_checkpoint;
 	bool m_panic_on_wal_error;
+public:
+	enum memtx_recovery_state m_state;
 };
 
 enum {

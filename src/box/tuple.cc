@@ -311,9 +311,7 @@ tuple_update(struct tuple_format *format,
 	if (new_data == NULL)
 		diag_raise();
 
-	struct tuple *ret = tuple_new(format, new_data, new_data + new_size);
-	if (ret == NULL)
-		diag_raise();
+	struct tuple *ret = tuple_new_xc(format, new_data, new_data + new_size);
 	return ret;
 }
 
@@ -332,9 +330,7 @@ tuple_upsert(struct tuple_format *format,
 	if (new_data == NULL)
 		diag_raise();
 
-	struct tuple *ret = tuple_new(format, new_data, new_data + new_size);
-	if (ret == NULL)
-		diag_raise();
+	struct tuple *ret = tuple_new_xc(format, new_data, new_data + new_size);
 	return ret;
 }
 

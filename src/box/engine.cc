@@ -158,6 +158,12 @@ Handler::applySnapshotRow(struct space *, struct request *)
 		  "applySnapshotRow");
 }
 
+void
+Handler::applyWalRow(struct space *space, struct request *request)
+{
+	return applySnapshotRow(space, request);
+}
+
 struct tuple *
 Handler::executeReplace(struct txn *, struct space *,
                         struct request *)

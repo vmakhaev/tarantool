@@ -311,10 +311,8 @@ VinylSpace::executeReplace(struct txn *txn, struct space *space,
 		}
 	}
 
-	struct tuple *new_tuple = tuple_new(space->format, request->tuple,
-					    request->tuple_end);
-	if (new_tuple == NULL)
-		diag_raise();
+	struct tuple *new_tuple = tuple_new_xc(space->format, request->tuple,
+					       request->tuple_end);
 	/* GC the new tuple if there is an exception below. */
 	TupleRef ref(new_tuple);
 	tuple_ref(new_tuple);
@@ -493,10 +491,8 @@ VinylSpace::executeUpsert(struct txn *txn, struct space *space,
 			 * becomes an insert.
 			 */
 			vinyl_insert_without_lookup(space, request, tx);
-			new_tuple = tuple_new(space->format, request->tuple,
-					      request->tuple_end);
-			if (new_tuple == NULL)
-				diag_raise();
+			new_tuple = tuple_new_xc(space->format, request->tuple,
+						 request->tuple_end);
 			tuple_ref(new_tuple);
 			stmt->new_tuple = new_tuple;
 			return;
