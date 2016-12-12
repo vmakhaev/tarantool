@@ -234,6 +234,12 @@ opt_set(void *opts, const struct opt_def *def, const char **val)
 	}
 }
 
+/**
+ * Populate key options from their msgpack-encoded representation
+ * (msgpack map)
+ *
+ * @return   the end of the msgpack map in the stream
+ */
 static const char *
 opts_create_from_field(void *opts, const struct opt_def *reg, const char *map,
 		       uint32_t errcode, uint32_t field_no)
@@ -317,9 +323,11 @@ key_opts_decode_distance(const char *str)
  * 1.6.6+
  * Fill key_opts structure from opts field in tuple of space _index
  * Throw an error is unrecognized option.
+ *
+ * @return  the end of the map in the msgpack stream
  */
 static const char *
-key_opts_create_from_field(struct key_opts *opts, const char *map)
+key_opts_create(struct key_opts *opts, const char *map)
 {
 	*opts = key_opts_default;
 	map = opts_create_from_field(opts, key_opts_reg, map,
@@ -438,7 +446,7 @@ key_def_new_from_tuple(struct tuple *tuple)
 	if (is_166plus) {
 		/* 1.6.6+ _index space structure */
 		const char *opts_field = tuple_field(tuple, INDEX_OPTS);
-		key_opts_create_from_field(&opts, opts_field);
+		key_opts_create(&opts, opts_field);
 		parts = tuple_field(tuple, INDEX_PARTS);
 		part_count = mp_decode_array(&parts);
 	} else {
@@ -533,8 +541,7 @@ key_def_tuple_update_lsn(struct tuple *tuple, int64_t lsn)
 		return tuple;
 	struct key_opts opts;
 	const char *opts_field = tuple_field(tuple, INDEX_OPTS);
-	const char *opts_field_end =
-		key_opts_create_from_field(&opts, opts_field);
+	const char *opts_field_end = key_opts_create(&opts, opts_field);
 	opts.lsn = lsn;
 	size_t size = (opts_field_end - opts_field) + 64;
 	char *buf = (char *)malloc(size);
@@ -558,11 +565,15 @@ key_def_tuple_update_lsn(struct tuple *tuple, int64_t lsn)
 	return tuple;
 }
 
+/**
+ * Fill space opts from the msgpack stream (MP_MAP field in the
+ * tuple).
+ */
 static void
-space_def_init_opts(struct space_def *def, struct tuple *tuple)
+space_opts_create(struct space_opts *opts, struct tuple *tuple)
 {
 	/* default values of opts */
-	def->opts = space_opts_default;
+	*opts = space_opts_default;
 
 	/* there is no property in the space */
 	if (tuple_field_count(tuple) <= OPTS)
@@ -577,16 +588,15 @@ space_def_init_opts(struct space_def *def, struct tuple *tuple)
 			while (isspace(*flags)) /* skip space */
 				flags++;
 			if (strncmp(flags, "temporary", strlen("temporary")) == 0)
-				def->opts.temporary = true;
+				opts->temporary = true;
 			flags = strchr(flags, ',');
 			if (flags)
 				flags++;
 		}
-		return;
+	} else {
+		opts_create_from_field(opts, space_opts_reg, data,
+				       ER_WRONG_SPACE_OPTIONS, OPTS);
 	}
-
-	opts_create_from_field(&def->opts, space_opts_reg, data,
-			       ER_WRONG_SPACE_OPTIONS, OPTS);
 }
 
 /**
@@ -604,7 +614,7 @@ space_def_create_from_tuple(struct space_def *def, struct tuple *tuple,
 	int engine_namelen = snprintf(def->engine_name, sizeof(def->engine_name),
 			 "%s", tuple_field_cstr(tuple, ENGINE));
 
-	space_def_init_opts(def, tuple);
+	space_opts_create(&def->opts, tuple);
 	space_def_check(def, namelen, engine_namelen, errcode);
 	access_check_ddl(def->uid, SC_SPACE);
 }
