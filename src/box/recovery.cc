@@ -345,10 +345,10 @@ recover_current_wal:
 void
 recovery_finalize(struct recovery *r, struct xstream *stream)
 {
-	recovery_stop_local(r);
-
 	xdir_scan_xc(&r->wal_dir);
 	recover_remaining_wals(r, stream, NULL);
+
+	recovery_stop_local(r);
 
 	recovery_close_log(r);
 
