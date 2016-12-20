@@ -7,6 +7,24 @@ test_run = env.new()
 SERVERS = { 'autobootstrap_guest1', 'autobootstrap_guest2', 'autobootstrap_guest3' }
 ---
 ...
+test_run:cmd("setopt delimiter ';'")
+---
+- true
+...
+function vclock_diff(vclock1, vclock2)
+    local diff = {}
+    for _, server in ipairs(SERVERS) do
+        local sid = test_run:get_server_id(server)
+        diff[sid] = (vclock2[sid] or 0) - (vclock1[sid] or 0)
+    end
+    return diff
+end;
+---
+...
+test_run:cmd("setopt delimiter ''");
+---
+- true
+...
 --
 -- Start servers
 --
@@ -20,31 +38,22 @@ test_run:wait_fullmesh(SERVERS)
 ---
 ...
 --
--- Print vclock
+-- Check vclock
 --
-_ = test_run:cmd("switch autobootstrap_guest1")
+vclock1 = test_run:get_vclock('autobootstrap_guest1')
 ---
 ...
-box.info.vclock
+vclock_diff(vclock1, test_run:get_vclock('autobootstrap_guest2'))
 ---
-- {1: 5}
+- - 0
+  - 0
+  - 0
 ...
-_ = test_run:cmd("switch autobootstrap_guest2")
+vclock_diff(vclock1, test_run:get_vclock('autobootstrap_guest3'))
 ---
-...
-box.info.vclock
----
-- {1: 5}
-...
-_ = test_run:cmd("switch autobootstrap_guest3")
----
-...
-box.info.vclock
----
-- {1: 5}
-...
-_ = test_run:cmd("switch default")
----
+- - 0
+  - 0
+  - 0
 ...
 --
 -- Insert rows on each server
@@ -76,9 +85,14 @@ _ = test_run:cmd("switch default")
 vclock = test_run:get_cluster_vclock(SERVERS)
 ---
 ...
-test_run:wait_cluster_vclock(SERVERS, vclock)
+vclock2 = test_run:wait_cluster_vclock(SERVERS, vclock)
 ---
-- {1: 6, 2: 1, 3: 1}
+...
+vclock_diff(vclock1, vclock2)
+---
+- - 1
+  - 1
+  - 1
 ...
 --
 -- Check result
