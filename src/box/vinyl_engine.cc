@@ -49,6 +49,7 @@
 #include "cluster.h" /* SERVER_UUID */
 #include "iproto_constants.h"
 #include "vinyl.h"
+#include "vy_meta.h"
 
 /*
  * Lookup the index corresponding to a record in the metadata table.

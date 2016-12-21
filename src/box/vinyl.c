@@ -73,6 +73,7 @@
 #include "index.h"
 
 #include "vy_stmt.h"
+#include "vy_meta.h"
 
 #define HEAP_FORWARD_DECLARATION
 #include "salad/heap.h"
