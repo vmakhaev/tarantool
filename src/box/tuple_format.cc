@@ -144,6 +144,8 @@ tuple_format_alloc(struct rlist *key_list)
 	format->id = FORMAT_ID_NIL;
 	format->field_count = field_count;
 	format->exact_field_count = 0;
+	format->engine = ENGINE_NIL;
+	format->tuple_delete = NULL;
 	return format;
 }
 
@@ -154,12 +156,32 @@ tuple_format_delete(struct tuple_format *format)
 	free(format);
 }
 
+extern "C" void
+tuple_delete_memtx(struct tuple_format *format, struct tuple *tuple);
+
+extern "C" void
+tuple_delete_vinyl(struct tuple_format *format, struct tuple *tuple);
+
+extern "C" struct tuple *
+tuple_new_memtx(struct tuple_format *format, const char *data, const char *end);
+
+extern "C" struct tuple *
+tuple_new_vinyl(struct tuple_format *format, const char *data, const char *end);
+
 struct tuple_format *
-tuple_format_new(struct rlist *key_list)
+tuple_format_new(struct rlist *key_list, enum engine_type engine)
 {
 	struct tuple_format *format = tuple_format_alloc(key_list);
 	if (format == NULL)
 		return NULL;
+	format->engine = engine;
+	if (engine == ENGINE_MEMTX) {
+		format->tuple_delete = tuple_delete_memtx;
+		format->tuple_new = tuple_new_memtx;
+	} else {
+		format->tuple_delete = tuple_delete_vinyl;
+		format->tuple_new = tuple_new_vinyl;
+	}
 	if (tuple_format_register(format) < 0) {
 		tuple_format_delete(format);
 		return NULL;
@@ -190,9 +212,9 @@ tuple_format_new(struct rlist *key_list)
 		if (format->fields[i].type == FIELD_TYPE_ANY)
 			format->fields[i].offset_slot = INT32_MAX;
 		else
-			format->fields[i].offset_slot = --current_slot;
+			format->fields[i].offset_slot = current_slot++;
 	}
-	format->field_map_size = -current_slot * sizeof(uint32_t);
+	format->field_map_size = current_slot * sizeof(uint32_t);
 	return format;
 }
 
@@ -234,7 +256,7 @@ tuple_init_field_map(const struct tuple_format *format, uint32_t *field_map,
 		if (key_mp_type_validate(format->fields[i].type, mp_type,
 					 ER_FIELD_TYPE, i + TUPLE_INDEX_BASE))
 			return -1;
-		if (format->fields[i].offset_slot < 0)
+		if (format->fields[i].offset_slot != INT32_MAX)
 			field_map[format->fields[i].offset_slot] =
 				(uint32_t) (pos - tuple);
 		mp_next(&pos);
@@ -246,7 +268,7 @@ void
 tuple_format_init()
 {
 	RLIST_HEAD(empty_list);
-	tuple_format_default = tuple_format_new(&empty_list);
+	tuple_format_default = tuple_format_new(&empty_list, ENGINE_MEMTX);
 	if (tuple_format_default == NULL)
 		diag_raise();
 	/* Make sure this one stays around. */
