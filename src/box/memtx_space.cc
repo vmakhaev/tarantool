@@ -91,8 +91,9 @@ void
 MemtxSpace::applySnapshotRow(struct space *space, struct request *request)
 {
 	assert(request->type == IPROTO_INSERT);
-	struct tuple *new_tuple = tuple_new_xc(space->format, request->tuple,
-					       request->tuple_end);
+	struct tuple *new_tuple = memtx_tuple_new_xc(space->format,
+						     request->tuple,
+						     request->tuple_end);
 	/* GC the new tuple if there is an exception below. */
 	TupleRef ref(new_tuple);
 	if (!rlist_empty(&space->on_replace)) {
@@ -122,8 +123,9 @@ struct tuple *
 MemtxSpace::executeReplace(struct txn *txn, struct space *space,
 			   struct request *request)
 {
-	struct tuple *new_tuple = tuple_new_xc(space->format, request->tuple,
-					       request->tuple_end);
+	struct tuple *new_tuple = memtx_tuple_new_xc(space->format,
+						     request->tuple,
+						     request->tuple_end);
 	/* GC the new tuple if there is an exception below. */
 	TupleRef ref(new_tuple);
 	enum dup_replace_mode mode = dup_replace_mode(request->type);
@@ -232,9 +234,9 @@ MemtxSpace::executeUpsert(struct txn *txn, struct space *space,
 				       request->index_base)) {
 			diag_raise();
 		}
-		struct tuple *new_tuple = tuple_new_xc(space->format,
-						       request->tuple,
-						       request->tuple_end);
+		struct tuple *new_tuple = memtx_tuple_new_xc(space->format,
+							     request->tuple,
+							     request->tuple_end);
 		TupleRef ref(new_tuple); /* useless, for unified approach */
 		old_tuple = replace(space, NULL, new_tuple, DUP_INSERT);
 		memtx_txn_add_undo(txn, old_tuple, new_tuple);
