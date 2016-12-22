@@ -119,7 +119,7 @@ vy_meta_insert_run(const char *begin, const char *end,
 	if (end == NULL)
 		end = empty_key;
 
-	if (boxk(IPROTO_INSERT, BOX_VINYL_ID, "[%s%llu%u%u%llu%u%M%M]",
+	if (boxk(IPROTO_INSERT, BOX_VINYL_ID, "[%s%llu%u%u%llu%u%p%p]",
 		 server_uuid_str, (unsigned long long)run_id,
 		 (unsigned)key_def->space_id, (unsigned)key_def->iid,
 		 (unsigned long long)key_def->opts.lsn, (unsigned)state,
