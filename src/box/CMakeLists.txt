@@ -49,7 +49,7 @@ add_library(box STATIC
     vinyl_index.cc
     vinyl.c
     vy_stmt.c
-    vy_meta.c
+    vy_meta.cc
     space.cc
     func.cc
     alter.cc

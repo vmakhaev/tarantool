@@ -57,14 +57,16 @@ vy_meta_create_from_tuple(struct vy_meta *def, struct tuple *tuple)
 	if (mp_typeof(*data) != MP_STR)
 		goto fail;
 	str = mp_decode_str(&data, &len);
+	uint32_t state;
 	if (tt_uuid_from_strl(str, len, &def->server_uuid) != 0 ||
 	    !mp_decode_uint_check(&data, &def->run_id) ||
 	    !mp_decode_u32_check(&data, &def->space_id) ||
 	    !mp_decode_u32_check(&data, &def->index_id) ||
 	    !mp_decode_uint_check(&data, &def->index_lsn) ||
-	    !mp_decode_u32_check(&data, &def->state) ||
-	    def->state >= vy_run_state_MAX)
+	    !mp_decode_u32_check(&data, &state) ||
+	    state >= vy_run_state_MAX)
 		goto fail;
+	def->state = (enum vy_run_state)state;
 	if (mp_typeof(*data) != MP_ARRAY)
 		goto fail;
 	def->begin = data;
