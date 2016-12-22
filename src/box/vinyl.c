@@ -134,8 +134,6 @@ struct vy_env {
 	ev_timer            quota_timer;
 	/** Set in case of recovery from a remote master. */
 	bool                is_remote_recovery;
-	/** Set if this env is under destruction. */
-	bool                is_destroying;
 };
 
 #define vy_crcs(p, size, crc) \
@@ -3380,20 +3378,26 @@ struct vy_task_ops {
 	 * which is too heavy for the tx thread (like IO or compression).
 	 * Returns 0 on success. On failure returns -1 and sets diag.
 	 */
-	int (*execute)(struct vy_task *);
+	int (*execute)(struct vy_task *task);
 	/**
 	 * This function is called by the scheduler upon task completion.
 	 * It may be used to finish the task from the tx thread context.
 	 *
+	 * If @in_shutdown is set, the callback is invoked from the
+	 * engine destructor.
+	 *
 	 * Returns 0 on success. On failure returns -1 and sets diag.
 	 */
-	int (*complete)(struct vy_task *);
+	int (*complete)(struct vy_task *task, bool in_shutdown);
 	/**
 	 * This function is called by the scheduler if either ->execute
 	 * or ->complete failed. It may be used to undo changes done to
 	 * the index when preparing the task.
+	 *
+	 * If @in_shutdown is set, the callback is invoked from the
+	 * engine destructor.
 	 */
-	void (*abort)(struct vy_task *);
+	void (*abort)(struct vy_task *task, bool in_shutdown);
 };
 
 struct vy_task {
@@ -3485,8 +3489,10 @@ out:
 }
 
 static int
-vy_task_dump_complete(struct vy_task *task)
+vy_task_dump_complete(struct vy_task *task, bool in_shutdown)
 {
+	(void)in_shutdown;
+
 	struct vy_index *index = task->index;
 	struct vy_env *env = index->env;
 	struct vy_range *range = task->range;
@@ -3526,8 +3532,10 @@ vy_task_dump_complete(struct vy_task *task)
 }
 
 static void
-vy_task_dump_abort(struct vy_task *task)
+vy_task_dump_abort(struct vy_task *task, bool in_shutdown)
 {
+	(void)in_shutdown;
+
 	struct vy_index *index = task->index;
 	struct vy_range *range = task->range;
 
@@ -3670,13 +3678,13 @@ out:
 }
 
 static int
-vy_task_compact_complete(struct vy_task *task)
+vy_task_compact_complete(struct vy_task *task, bool in_shutdown)
 {
 	struct vy_index *index = task->index;
 	struct vy_range *range = task->range;
 	struct vy_range *r;
 
-	if (!index->env->is_destroying &&
+	if (!in_shutdown &&
 	    vy_meta_commit_compact(range) != 0)
 		return -1;
 
@@ -3702,14 +3710,14 @@ vy_task_compact_complete(struct vy_task *task)
 }
 
 static void
-vy_task_compact_abort(struct vy_task *task)
+vy_task_compact_abort(struct vy_task *task, bool in_shutdown)
 {
 	struct vy_index *index = task->index;
 	struct vy_range *range = task->range;
 
 	say_debug("range compact failed: %s", vy_range_str(range));
 
-	if (!index->env->is_destroying)
+	if (!in_shutdown)
 		vy_meta_abort_compact(range);
 
 	vy_range_discard_compact_parts(range);
@@ -4077,7 +4085,8 @@ found:
 }
 
 static int
-vy_scheduler_complete_task(struct vy_scheduler *scheduler, struct vy_task *task)
+vy_scheduler_complete_task(struct vy_scheduler *scheduler,
+			   struct vy_task *task, bool in_shutdown)
 {
 	if (task->status != 0) {
 		/* ->execute failed, propagate diag */
@@ -4086,7 +4095,7 @@ vy_scheduler_complete_task(struct vy_scheduler *scheduler, struct vy_task *task)
 		goto fail;
 	}
 	if (task->ops->complete &&
-	    task->ops->complete(task) != 0) {
+	    task->ops->complete(task, in_shutdown) != 0) {
 		assert(!diag_is_empty(diag_get()));
 		diag_move(diag_get(), &scheduler->diag);
 		goto fail;
@@ -4094,7 +4103,7 @@ vy_scheduler_complete_task(struct vy_scheduler *scheduler, struct vy_task *task)
 	return 0;
 fail:
 	if (task->ops->abort)
-		task->ops->abort(task);
+		task->ops->abort(task, in_shutdown);
 	return -1;
 }
 
@@ -4129,7 +4138,8 @@ vy_scheduler_f(va_list va)
 
 		/* Complete and delete all processed tasks. */
 		stailq_foreach_entry_safe(task, next, &output_queue, link) {
-			if (vy_scheduler_complete_task(scheduler, task) != 0)
+			if (vy_scheduler_complete_task(scheduler,
+						       task, false) != 0)
 				tasks_failed++;
 			else
 				tasks_done++;
@@ -4318,7 +4328,7 @@ vy_scheduler_stop(struct vy_scheduler *scheduler)
 	struct vy_task *task, *next;
 	stailq_foreach_entry_safe(task, next, &scheduler->input_queue, link) {
 		if (task->ops->abort)
-			task->ops->abort(task);
+			task->ops->abort(task, true);
 		vy_task_delete(&scheduler->task_pool, task);
 	}
 	stailq_create(&scheduler->input_queue);
@@ -4334,7 +4344,7 @@ vy_scheduler_stop(struct vy_scheduler *scheduler)
 
 	/* Complete all processed tasks */
 	stailq_foreach_entry_safe(task, next, &scheduler->output_queue, link) {
-		vy_scheduler_complete_task(scheduler, task);
+		vy_scheduler_complete_task(scheduler, task, true);
 		vy_task_delete(&scheduler->task_pool, task);
 	}
 	stailq_create(&scheduler->output_queue);
@@ -6419,7 +6429,6 @@ error_conf:
 void
 vy_env_delete(struct vy_env *e)
 {
-	e->is_destroying = true;
 	ev_timer_stop(loop(), &e->quota_timer);
 	vy_squash_queue_delete(e->squash_queue);
 	vy_scheduler_delete(e->scheduler);
