@@ -68,6 +68,8 @@ struct vy_meta {
 
 int
 vy_meta_create_from_tuple(struct vy_meta *r, struct tuple *tuple);
+int64_t
+vy_meta_next_run_id(void);
 int
 vy_meta_insert_run(const char *begin, const char *end,
 		   const struct key_def *key_def,

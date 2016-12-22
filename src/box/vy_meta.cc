@@ -81,16 +81,12 @@ fail:
 }
 
 /*
- * Insert a run record into the vinyl metadata table.
- *
- * This function allocates a unique ID for the run on success.
+ * Return the id that will be used for the next new run,
+ * or -1 on failure.
  */
-int
-vy_meta_insert_run(const char *begin, const char *end,
-		   const struct key_def *key_def,
-		   enum vy_run_state state, int64_t *p_run_id)
+int64_t
+vy_meta_next_run_id(void)
 {
-	int64_t run_id = 0;
 	char server_uuid_str[UUID_STR_LEN];
 	tt_uuid_to_string(&SERVER_UUID, server_uuid_str);
 
@@ -108,8 +104,28 @@ vy_meta_insert_run(const char *begin, const char *end,
 		if (vy_meta_create_from_tuple(&def, max) != 0)
 			return -1;
 		if (tt_uuid_is_equal(&def.server_uuid, &SERVER_UUID))
-			run_id = def.run_id + 1;
+			return def.run_id + 1;
 	}
+	/* First run for this server. */
+	return 0;
+}
+
+/*
+ * Insert a run record into the vinyl metadata table.
+ *
+ * This function allocates a unique ID for the run on success.
+ */
+int
+vy_meta_insert_run(const char *begin, const char *end,
+		   const struct key_def *key_def,
+		   enum vy_run_state state, int64_t *p_run_id)
+{
+	char server_uuid_str[UUID_STR_LEN];
+	tt_uuid_to_string(&SERVER_UUID, server_uuid_str);
+
+	int64_t run_id = vy_meta_next_run_id();
+	if (run_id < 0)
+		return -1;
 
 	char empty_key[16];
 	assert(mp_sizeof_array(0) <= sizeof(empty_key));
