@@ -543,6 +543,8 @@ local function upgrade_vinyl_to_1_7_2()
     log.info("create index primary on _vinyl")
     _index:insert{_vinyl.id, 0, 'primary', 'tree', {unique = true},
                   {{0, 'string'}, {1, 'unsigned'}}}
+    _index:insert{_vinyl.id, 1, 'state', 'tree', {unique = true},
+                  {{5, 'unsigned'}, {0, 'string'}, {1, 'unsigned'}}}
 end
 
 local function upgrade_to_1_7_2()

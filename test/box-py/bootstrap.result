@@ -87,6 +87,8 @@ box.space._index:select{}
   - [320, 0, 'primary', 'tree', {'unique': true}, [[0, 'unsigned']]]
   - [320, 1, 'uuid', 'tree', {'unique': true}, [[1, 'string']]]
   - [328, 0, 'primary', 'tree', {'unique': true}, [[0, 'string'], [1, 'unsigned']]]
+  - [328, 1, 'state', 'tree', {'unique': true}, [[5, 'unsigned'], [0, 'string'], [
+        1, 'unsigned']]]
 ...
 box.space._user:select{}
 ---
