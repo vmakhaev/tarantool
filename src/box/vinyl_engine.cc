@@ -57,8 +57,6 @@
 static VinylIndex *
 vinyl_index_from_meta(const struct vy_meta *def)
 {
-	if (!tt_uuid_is_equal(&def->server_uuid, &SERVER_UUID))
-		return NULL;
 	struct space *space = space_by_id(def->space_id);
 	if (space == NULL)
 		return NULL;
@@ -67,35 +65,6 @@ vinyl_index_from_meta(const struct vy_meta *def)
 	    index->key_def->opts.lsn != (int64_t)def->index_lsn)
 		return NULL;
 	return index;
-}
-
-/*
- * Delete a stale run record from the vinyl metadata table
- * along with the file it references.
- */
-static void
-vinyl_purge_meta(struct tuple *tuple)
-{
-	struct vy_meta def;
-	if (vy_meta_create_from_tuple(&def, tuple) != 0) {
-		/* Silently ignore alien records. */
-		diag_clear(diag_get());
-		return;
-	}
-	VinylIndex *index = vinyl_index_from_meta(&def);
-	if (index == NULL)
-		return;
-	/*
-	 * Delete the record if it is stale, i.e. left from
-	 * a deleted or failed run.
-	 *
-	 * TODO:
-	 *  - Delete reserved records.
-	 *  - Delete records left from dropped indexes.
-	 */
-	if (def.state == VY_RUN_DELETED ||
-	    def.state == VY_RUN_FAILED)
-		vy_index_purge_run(index->db, def.run_id);
 }
 
 /*
@@ -114,6 +83,8 @@ vinyl_recovery_trigger_f(struct trigger *trigger, void *event)
 	struct vy_meta def;
 	if (vy_meta_create_from_tuple(&def, tuple) != 0)
 		diag_raise();
+	if (!tt_uuid_is_equal(&def.server_uuid, &SERVER_UUID))
+		return;
 	VinylIndex *index = vinyl_index_from_meta(&def);
 	if (index == NULL)
 		return;
@@ -136,7 +107,6 @@ vinyl_engine_get_env()
 VinylEngine::VinylEngine()
 	:Engine("vinyl")
 	,recovery_complete(false)
-	,gc_iter(NULL)
 {
 	flags = 0;
 	env = NULL;
@@ -392,52 +362,10 @@ VinylEngine::rollbackStatement(struct txn *txn, struct txn_stmt *stmt)
 				 stmt->engine_savepoint);
 }
 
-void
-VinylEngine::gc_iter_init()
-{
-	assert(gc_iter == NULL);
-	struct space *space = space_cache_find(BOX_VINYL_ID);
-	Index *pk = index_find(space, 0);
-	gc_iter = pk->allocIterator();
-	pk->initIterator(gc_iter, ITER_ALL, NULL, 0);
-	pk->createReadViewForIterator(gc_iter);
-}
-
-void
-VinylEngine::gc_iter_destroy()
-{
-	assert(gc_iter != NULL);
-	struct space *space = space_cache_find(BOX_VINYL_ID);
-	Index *pk = space_index(space, 0);
-	pk->destroyReadViewForIterator(gc_iter);
-	gc_iter->free(gc_iter);
-	gc_iter = NULL;
-}
-
-void
-VinylEngine::gc()
-{
-	assert(gc_iter != NULL);
-
-	struct tuple *tuple;
-	while ((tuple = gc_iter->next(gc_iter)) != NULL)
-		vinyl_purge_meta(tuple);
-
-	gc_iter_destroy();
-}
-
 int
 VinylEngine::beginCheckpoint()
 {
-	if (vy_checkpoint(env) != 0)
-		return -1;
-	/*
-	 * Open the read iterator used for garbage collection when
-	 * checkpoint begins, so that runs deleted during checkpoint
-	 * and therefore excluded from the snapshot are not removed.
-	 */
-	gc_iter_init();
-	return 0;
+	return vy_checkpoint(env);
 }
 
 int
@@ -446,16 +374,20 @@ VinylEngine::waitCheckpoint(struct vclock* vclock)
 	return vy_wait_checkpoint(env, vclock);
 }
 
+static int
+vy_run_gc(const struct vy_meta *def)
+{
+	/* TODO: delete runs left from dropped indexes. */
+	VinylIndex *index = vinyl_index_from_meta(def);
+	if (index == NULL)
+		return 0;
+	return vy_index_purge_run(index->db, def->run_id);
+}
+
 void
 VinylEngine::commitCheckpoint(struct vclock *vclock)
 {
 	(void)vclock;
-	gc();
-}
-
-void
-VinylEngine::abortCheckpoint()
-{
-	if (gc_iter != NULL)
-		gc_iter_destroy();
+	if (vy_meta_purge(vy_run_gc) != 0)
+		error_log(diag_last_error(diag_get()));
 }

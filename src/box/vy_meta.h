@@ -79,6 +79,11 @@ vy_meta_update_run(int64_t run_id, enum vy_run_state state);
 int
 vy_meta_delete_run(int64_t run_id);
 
+typedef int
+(*vy_meta_purge_cb)(const struct vy_meta *meta);
+int
+vy_meta_purge(vy_meta_purge_cb cb);
+
 #ifdef __cplusplus
 }
 #endif

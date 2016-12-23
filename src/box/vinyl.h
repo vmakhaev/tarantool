@@ -308,7 +308,7 @@ vy_index_send(struct vy_index *index, vy_send_row_f sendrow, void *ctx);
 int
 vy_recovery_process_meta(struct vy_index *index, const struct vy_meta *def);
 
-void
+int
 vy_index_purge_run(struct vy_index *index, int64_t run_id);
 
 #ifdef __cplusplus

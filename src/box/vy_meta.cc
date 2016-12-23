@@ -8,7 +8,9 @@
 #include "index.h" /* box_index_max() */
 #include "iproto_constants.h"
 #include "key_def.h"
-#include "schema.h" /* BOX_VINYL_ID */
+#include "schema.h"
+#include "scoped_guard.h"
+#include "space.h"
 #include "tt_uuid.h"
 #include "tuple.h"
 
@@ -171,4 +173,60 @@ vy_meta_delete_run(int64_t run_id)
 	tt_uuid_to_string(&SERVER_UUID, server_uuid_str);
 	return boxk(IPROTO_DELETE, BOX_VINYL_ID, "[%s%llu]",
 		    server_uuid_str, (unsigned long long)run_id);
+}
+
+static int
+vy_meta_purge_state(Index *index, enum vy_run_state state,
+		    const char *server_uuid_str, vy_meta_purge_cb cb)
+{
+	char key[64];
+	size_t key_len = mp_format(key, sizeof(key), "%u%s",
+				   (unsigned)state, server_uuid_str);
+	assert(key_len <= sizeof(key));
+
+	struct iterator *it = index->allocIterator();
+	auto guard_it_free = make_scoped_guard([=]{ it->free(it); });
+
+	while (true) {
+		index->initIterator(it, ITER_EQ, key, 2);
+		struct tuple *tuple = it->next(it);
+		if (tuple == NULL)
+			break;
+		struct vy_meta def;
+		if (vy_meta_create_from_tuple(&def, tuple) != 0)
+			return -1;
+		/* def points to tuple fields. */
+		tuple_ref(tuple);
+		int rc = cb(&def);
+		tuple_unref(tuple);
+		if (rc != 0)
+			return -1;
+		if (vy_meta_delete_run(def.run_id) != 0)
+			return -1;
+	}
+	return 0;
+}
+
+/*
+ * Delete all stale run records whose from the vinyl metadata table,
+ * calling @cb per each deleted record. If @cb fails, -1 is returned
+ * and the procedure is aborted.
+ */
+int
+vy_meta_purge(vy_meta_purge_cb cb)
+{
+	char server_uuid_str[UUID_STR_LEN];
+	tt_uuid_to_string(&SERVER_UUID, server_uuid_str);
+
+	struct space *space = space_by_id(BOX_VINYL_ID);
+	Index *index = space_index(space, 1);
+
+	/* TODO: Delete VY_RUN_RESERVED records as well. */
+	if (vy_meta_purge_state(index, VY_RUN_DELETED,
+				server_uuid_str, cb) != 0 ||
+	    vy_meta_purge_state(index, VY_RUN_FAILED,
+				server_uuid_str, cb) != 0)
+		return -1;
+
+	return 0;
 }

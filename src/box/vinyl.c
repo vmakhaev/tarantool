@@ -10452,23 +10452,19 @@ invalid_meta:
 /*
  * Called after successful snapshot to cleanup the index directory.
  */
-void
+int
 vy_index_purge_run(struct vy_index *index, int64_t run_id)
 {
-	bool fail = false;
 	/* Remove all files left from the run. */
 	for (int type = 0; type < vy_file_MAX; type++) {
 		char path[PATH_MAX];
 		vy_run_snprint_path(path, sizeof(path),
 				    index->path, run_id, type);
 		if (unlink(path) < 0 && errno != ENOENT) {
-			say_syserror("failed to delete file '%s'", path);
-			fail = true;
+			diag_set(SystemError,
+				 "failed to delete file '%s'", path);
+			return -1;
 		}
 	}
-	/* Delete the run record on success. */
-	if (!fail && vy_meta_delete_run(run_id) != 0) {
-		error_log(diag_last_error(diag_get()));
-		diag_clear(diag_get());
-	}
+	return 0;
 }
