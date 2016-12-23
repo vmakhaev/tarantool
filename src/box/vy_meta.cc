@@ -15,71 +15,20 @@
 #include "tuple.h"
 
 /*
- * Try to decode u64 from MsgPack data.
- * Return true on success.
- */
-static inline bool
-mp_decode_uint_check(const char **data, uint64_t *pval)
-{
-	if (mp_typeof(**data) != MP_UINT)
-		return false;
-	*pval = mp_decode_uint(data);
-	return true;
-}
-
-/*
- * Try to decode u32 from MsgPack data.
- * Return true on success.
- */
-static inline bool
-mp_decode_u32_check(const char **data, uint32_t *pval)
-{
-	uint64_t val;
-	if (!mp_decode_uint_check(data, &val))
-		return false;
-	if (val > UINT32_MAX)
-		return false;
-	*pval = val;
-	return true;
-}
-
-/*
  * Fill vy_meta structure from a record in _vinyl
  * system space.
  */
-int
+void
 vy_meta_create_from_tuple(struct vy_meta *def, struct tuple *tuple)
 {
-	const char *data = tuple_data(tuple);
-	uint32_t len;
-	const char *str;
-
-	if (mp_decode_array(&data) != 8)
-		goto fail;
-	if (mp_typeof(*data) != MP_STR)
-		goto fail;
-	str = mp_decode_str(&data, &len);
-	uint32_t state;
-	if (tt_uuid_from_strl(str, len, &def->server_uuid) != 0 ||
-	    !mp_decode_uint_check(&data, &def->run_id) ||
-	    !mp_decode_u32_check(&data, &def->space_id) ||
-	    !mp_decode_u32_check(&data, &def->index_id) ||
-	    !mp_decode_uint_check(&data, &def->index_lsn) ||
-	    !mp_decode_u32_check(&data, &state) ||
-	    state >= vy_run_state_MAX)
-		goto fail;
-	def->state = (enum vy_run_state)state;
-	if (mp_typeof(*data) != MP_ARRAY)
-		goto fail;
-	def->begin = data;
-	mp_next(&data);
-	if (mp_typeof(*data) != MP_ARRAY)
-		goto fail;
-	def->end = data;
-	return 0;
-fail:
-	diag_set(ClientError, ER_VINYL, "invalid metadata");
-	return -1;
+	tuple_field_uuid(tuple, 0, &def->server_uuid);
+	def->run_id = tuple_field_uint(tuple, 1);
+	def->space_id = tuple_field_u32(tuple, 2);
+	def->index_id = tuple_field_u32(tuple, 3);
+	def->index_lsn = tuple_field_uint(tuple, 4);
+	def->state = (enum vy_run_state)tuple_field_u32(tuple, 5);
+	def->begin = tuple_field_check(tuple, 6, MP_ARRAY);
+	def->end = tuple_field_check(tuple, 7, MP_ARRAY);
 }
 
 /*
@@ -103,8 +52,11 @@ vy_meta_next_run_id(void)
 		return -1;
 	if (max != NULL) {
 		struct vy_meta def;
-		if (vy_meta_create_from_tuple(&def, max) != 0)
+		try {
+			vy_meta_create_from_tuple(&def, max);
+		} catch (Exception *e) {
 			return -1;
+		}
 		if (tt_uuid_is_equal(&def.server_uuid, &SERVER_UUID))
 			return def.run_id + 1;
 	}
@@ -193,8 +145,11 @@ vy_meta_purge_state(Index *index, enum vy_run_state state,
 		if (tuple == NULL)
 			break;
 		struct vy_meta def;
-		if (vy_meta_create_from_tuple(&def, tuple) != 0)
+		try {
+			vy_meta_create_from_tuple(&def, tuple);
+		} catch (Exception *e) {
 			return -1;
+		}
 		/* def points to tuple fields. */
 		tuple_ref(tuple);
 		int rc = cb(&def);

@@ -66,8 +66,6 @@ struct vy_meta {
 	const char *end;
 };
 
-int
-vy_meta_create_from_tuple(struct vy_meta *r, struct tuple *tuple);
 int64_t
 vy_meta_next_run_id(void);
 int
@@ -87,5 +85,8 @@ vy_meta_purge(vy_meta_purge_cb cb);
 #ifdef __cplusplus
 }
 #endif
+
+void
+vy_meta_create_from_tuple(struct vy_meta *r, struct tuple *tuple);
 
 #endif /* INCLUDES_TARANTOOL_BOX_VY_META_H */

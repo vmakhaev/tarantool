@@ -81,8 +81,7 @@ vinyl_recovery_trigger_f(struct trigger *trigger, void *event)
 	if (tuple == NULL)
 		return;
 	struct vy_meta def;
-	if (vy_meta_create_from_tuple(&def, tuple) != 0)
-		diag_raise();
+	vy_meta_create_from_tuple(&def, tuple);
 	if (!tt_uuid_is_equal(&def.server_uuid, &SERVER_UUID))
 		return;
 	VinylIndex *index = vinyl_index_from_meta(&def);
