@@ -536,8 +536,9 @@ local function upgrade_vinyl_to_1_7_2()
     format[4] = {name = 'index_id', type = 'num'}
     format[5] = {name = 'index_lsn', type = 'num'}
     format[6] = {name = 'state', type = 'num'}
-    format[7] = {name = 'begin', type = 'array'}
-    format[8] = {name = 'end', type = 'array'}
+    format[7] = {name = 'hint', type = 'num'}
+    format[8] = {name = 'begin', type = 'array'}
+    format[9] = {name = 'end', type = 'array'}
     _space:insert{_vinyl.id, ADMIN, '_vinyl', 'memtx', 0, MAP, format}
     -- primary key: server id, run id
     log.info("create index primary on _vinyl")

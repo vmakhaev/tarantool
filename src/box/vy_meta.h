@@ -47,6 +47,19 @@ enum vy_run_state {
 	vy_run_state_MAX,
 };
 
+enum vy_meta_hint {
+	/* Run is added to an existing range. */
+	VY_ADD_RUN,
+	/* Range split is initiated. */
+	VY_SPLIT,
+	/* Range split is continued. */
+	VY_SPLIT_CONT,
+	/* Run is added to a part of a splitting range. */
+	VY_SPLIT_ADD_RUN,
+
+	vy_meta_hint_MAX,
+};
+
 struct vy_meta {
 	/** UUID of the server. */
 	struct tt_uuid server_uuid;
@@ -60,6 +73,8 @@ struct vy_meta {
 	uint64_t index_lsn;
 	/** Run state. */
 	enum vy_run_state state;
+	/** Hint on how to recover the run. */
+	enum vy_meta_hint hint;
 	/** Start of the range this run belongs to. */
 	const char *begin;
 	/** End of the range this run belongs to. */
@@ -71,7 +86,8 @@ vy_meta_next_run_id(void);
 int
 vy_meta_insert_run(const char *begin, const char *end,
 		   const struct key_def *key_def,
-		   enum vy_run_state state, int64_t *p_run_id);
+		   enum vy_run_state state, enum vy_meta_hint hint,
+		   int64_t *p_run_id);
 int
 vy_meta_update_run(int64_t run_id, enum vy_run_state state);
 int

@@ -1797,17 +1797,6 @@ vy_range_compare_end(struct vy_range *range, struct vy_stmt *end)
 }
 
 /*
- * Compare range->begin with another range's end.
- */
-static int
-vy_range_compare_begin_with_end(struct vy_range *range, struct vy_stmt *end)
-{
-	if (range->begin == NULL || end == NULL)
-		return -1;
-	return vy_key_compare(range->begin, end, range->index->key_def);
-}
-
-/*
  * Compare range->end with another range's begin.
  */
 static int
@@ -3144,7 +3133,7 @@ vy_index_create(struct vy_index *index)
 	vy_scheduler_add_range(index->env->scheduler, range);
 	if (vy_meta_insert_run(vy_range_begin_data(range),
 			       vy_range_end_data(range), index->key_def,
-			       VY_RUN_COMMITTED, &mem->id) != 0)
+			       VY_RUN_COMMITTED, VY_ADD_RUN, &mem->id) != 0)
 		return -1;
 
 	return 0;
@@ -3586,7 +3575,7 @@ vy_task_dump_new(struct mempool *pool, struct vy_range *range)
 
 	if (vy_meta_insert_run(vy_range_begin_data(range),
 			       vy_range_end_data(range), index->key_def,
-			       VY_RUN_COMMITTED, &mem->id) != 0)
+			       VY_RUN_COMMITTED, VY_ADD_RUN, &mem->id) != 0)
 		goto err_meta;
 
 	/*
@@ -6557,7 +6546,7 @@ vy_index_end_remote_recovery(struct vy_index *index)
 	if (vy_meta_insert_run(vy_range_begin_data(range),
 			       vy_range_end_data(range),
 			       index->key_def, VY_RUN_COMMITTED,
-			       &mem->id) != 0)
+			       VY_ADD_RUN, &mem->id) != 0)
 		return -1;
 	return 0;
 }
@@ -10107,15 +10096,20 @@ vy_meta_prepare_compact(int n_parts, struct vy_range **parts)
 		struct vy_range *r = parts[i];
 		struct vy_mem *mem = rlist_first_entry(&r->mems,
 						       struct vy_mem, link);
-		assert(r->new_run->id < 0);
 		const char *begin = vy_range_begin_data(r);
 		const char *end = vy_range_end_data(r);
-		if (vy_meta_insert_run(begin, end, r->index->key_def,
-				       VY_RUN_RESERVED, &r->new_run->id) != 0)
-			goto rollback;
+
 		assert(mem->id < 0);
 		if (vy_meta_insert_run(begin, end, r->index->key_def,
-				       VY_RUN_COMMITTED, &mem->id) != 0)
+				       VY_RUN_COMMITTED,
+				       i == 0 ? VY_SPLIT : VY_SPLIT_CONT,
+				       &mem->id) != 0)
+			goto rollback;
+
+		assert(r->new_run->id < 0);
+		if (vy_meta_insert_run(begin, end, r->index->key_def,
+				       VY_RUN_RESERVED, VY_SPLIT_ADD_RUN,
+				       &r->new_run->id) != 0)
 			goto rollback;
 	}
 	if (box_txn_commit() != 0)
@@ -10184,7 +10178,8 @@ vy_meta_abort_compact(struct vy_range *range)
  * Replay a vinyl metadata record inserting a new run into an index.
  */
 static int
-vy_recovery_insert_run(struct vy_index *index, int64_t id,
+vy_recovery_insert_run(struct vy_index *index,
+		       int64_t id, enum vy_meta_hint hint,
 		       struct vy_stmt *begin, struct vy_stmt *end)
 {
 	struct vy_range *range, *part;
@@ -10193,135 +10188,61 @@ retry:
 	range = (begin != NULL) ?
 		vy_range_tree_psearch(&index->tree, begin) :
 		vy_range_tree_first(&index->tree);
-	if (range == NULL) {
-		if (begin != NULL)
-			range = vy_range_tree_nsearch(&index->tree, begin);
-		if (range != NULL &&
-		    vy_range_compare_begin_with_end(range, end) < 0) {
-			/*
-			 * Could not happen.
-			 *
-			 *               |----range----|
-			 *   |------run------|
-			 */
-			goto fail;
-		}
-		/*
-		 * No intersection, create a new range.
-		 *
-		 *                    |------range------|
-		 *   |-----run-----|
-		 */
-		goto new_range;
-	}
-	if (range->shadow != NULL)
+	if (range != NULL && range->shadow != NULL) {
+		part = range;
 		range = range->shadow;
-
-	if (vy_range_compare_end_with_begin(range, begin) <= 0) {
+	} else
+		part = NULL;
+	if (range == NULL ||
+	    vy_range_compare_end_with_begin(range, begin) <= 0) {
 		/*
-		 * No intersection, create a new range.
-		 *
-		 *   |------range------|
-		 *                          |----run----|
+		 * No range in the tree intersects the given run.
+		 * Create a new range for it.
 		 */
-		goto new_range;
+		range = vy_range_new(index, begin, end);
+		if (range == NULL)
+			return -1;
+		vy_index_add_range(index, range);
+		hint = VY_ADD_RUN;
+		part = NULL;
 	}
-
-	if (vy_range_compare_end(range, end) < 0) {
+	if (part != NULL &&
+	    hint != VY_SPLIT_CONT && hint != VY_SPLIT_ADD_RUN) {
 		/*
-		 * Could not happen.
-		 *
-		 *      |--------range--------|
-		 *                  |------run------|
+		 * The range is being split and the new run
+		 * isn't a part of the split. Cancel the split
+		 * and retry.
 		 */
-		goto fail;
+		vy_range_discard_compact_parts(range);
+		goto retry;
 	}
-
-	if (!rlist_empty(&range->compact_list)) {
+	switch (hint) {
+	case VY_ADD_RUN:
+		break;
+	case VY_SPLIT:
+	case VY_SPLIT_CONT:
+		/* Start or continue splitting the range. */
+		part = vy_range_new(index, begin, end);
+		if (part == NULL)
+			return -1;
+		vy_range_add_compact_part(range, part);
+		range = part;
+		break;
+	case VY_SPLIT_ADD_RUN:
 		/*
-		 * The range is being split, consider adding
-		 * a new part.
+		 * If the range is being split, add the given
+		 * run to the found part.
 		 */
-		part = rlist_last_entry(&range->compact_list,
-					struct vy_range, compact_list);
-		assert(part->shadow == range);
-		assert(vy_range_compare_end(part, range->end) <= 0);
-		if (vy_range_compare_end(part, range->end) == 0) {
-			/*
-			 * Split is complete, but not committed. Commit
-			 * is done in vy_recovery_delete_run() when the
-			 * last item in range->runs is deleted. Hence
-			 * split was aborted.
-			 *
-			 *    |------------range------------|
-			 *                     |----part----|
-			 */
-			vy_range_discard_compact_parts(range);
-			goto retry;
-		}
-		if (vy_range_compare_end_with_begin(part, begin) != 0) {
-			/*
-			 * Could not happen.
-			 *
-			 *    |------------range------------|
-			 *    |----part----|
-			 *             |------run------|
-			 */
-			goto fail;
-		}
-		/*
-		 * Add a new part the range is going to be split into.
-		 *
-		 *    |------------range------------|
-		 *    |----part----|---run---|
-		 */
-		goto prepare_split;
-	} else {
-		if (vy_range_compare_begin(range, begin) != 0) {
-			/*
-			 * Could not happen.
-			 *
-			 *      |--------range--------|
-			 *           |----run----|
-			 */
-			goto fail;
-		}
-		if (vy_range_compare_end(range, end) == 0) {
-			/*
-			 * Add new run.
-			 *
-			 *      |--------range--------|
-			 *      |---------run---------|
-			 */
-			goto new_run;
-		}
-		/*
-		 * Initiate split.
-		 *
-		 *      |--------range--------|
-		 *      |-----run-----|
-		 */
-		goto prepare_split;
-	}
-
-prepare_split:
-	part = vy_range_new(index, begin, end);
-	if (part == NULL)
+		if (part != NULL)
+			range = part;
+		break;
+	default:
+		diag_set(ClientError, ER_VINYL,
+			 "metadata corrupted: unknown hint");
 		return -1;
-	vy_range_add_compact_part(range, part);
-	range = part;
-	goto new_run;
-new_range:
-	range = vy_range_new(index, begin, end);
-	if (range == NULL)
-		return -1;
-	vy_index_add_range(index, range);
-new_run:
+	}
+	/* Insert the given run into the found range. */
 	return vy_range_recover_run(range, id);
-fail:
-	diag_set(ClientError, ER_VINYL,
-		 "run file missing or metadata corrupted");
-	return -1;
 }
 
 /*
@@ -10331,6 +10252,8 @@ static int
 vy_recovery_delete_run(struct vy_index *index, int64_t id,
 		       struct vy_stmt *begin, struct vy_stmt *end)
 {
+	(void)end;
+
 	/* Ignore deleted runs when recovering from a snapshot. */
 	if (index->env->status == VINYL_INITIAL_RECOVERY)
 		return 0;
@@ -10340,45 +10263,31 @@ vy_recovery_delete_run(struct vy_index *index, int64_t id,
 	range = (begin != NULL) ?
 		vy_range_tree_psearch(&index->tree, begin) :
 		vy_range_tree_first(&index->tree);
-	if (range == NULL)
-		goto fail;
+	if (range == NULL) {
+		diag_set(ClientError, ER_VINYL,
+			 "metadata corrupted: range not found");
+		return -1;
+	}
 	if (range->shadow != NULL)
 		range = range->shadow;
 
-	if (vy_range_compare_begin(range, begin) > 0 ||
-	    vy_range_compare_end(range, end) < 0) {
-		/*
-		 * Could not happen.
-		 *
-		 *         |---------range---------|
-		 *   |--------run--------|
-		 *
-		 * or
-		 *
-		 *         |---------range---------|
-		 *                       |--------run--------|
-		 *
-		 * Deleted run must be within the range.
-		 */
-		goto fail;
-	}
-
+	/* Delete the run given its ID. */
 	if (vy_range_delete_run_by_id(range, id) != 0 &&
-	    vy_range_delete_mem_by_id(range, id) != 0)
-		goto fail; /* run not found */
+	    vy_range_delete_mem_by_id(range, id) != 0) {
+		diag_set(ClientError, ER_VINYL,
+			 "metadata corrupted: run not found");
+		return -1;
+	}
 
 	/*
 	 * If the range is being split, and this is the last run
 	 * in the range, commit the split.
 	 */
-	if (range->run_count == 0 && !rlist_empty(&range->compact_list))
+	if (range->run_count == 0 && range->mem_count == 0 &&
+	    !rlist_empty(&range->compact_list))
 		vy_range_commit_compact_parts(range);
 
 	return 0;
-fail:
-	diag_set(ClientError, ER_VINYL,
-		 "run file missing or metadata corrupted");
-	return -1;
 }
 
 /*
@@ -10393,9 +10302,10 @@ vy_recovery_process_meta(struct vy_index *index, const struct vy_meta *def)
 	int rc = -1;
 
 	say_debug("process meta: %"PRIu32"/%"PRIu32"/%"PRIu64": "
-		  "id %"PRIu64" state %d %s .. %s",
-		  def->space_id, def->index_id, def->index_lsn, def->run_id,
-		  def->state, vy_key_str(def->begin), vy_key_str(def->end));
+		  "id %"PRIu64" state %d hint %d %s .. %s",
+		  def->space_id, def->index_id, def->index_lsn,
+		  def->run_id, def->state, def->hint,
+		  vy_key_str(def->begin), vy_key_str(def->end));
 
 	/* Extract range begin. */
 	data = def->begin;
@@ -10422,13 +10332,15 @@ vy_recovery_process_meta(struct vy_index *index, const struct vy_meta *def)
 	    vy_key_compare(begin, end, key_def) >= 0)
 		goto invalid_meta;
 
-	/* Process the record. */
+	/* Process a WAL record. */
 	switch (def->state) {
 	case VY_RUN_COMMITTED:
-		rc = vy_recovery_insert_run(index, def->run_id, begin, end);
+		rc = vy_recovery_insert_run(index, def->run_id, def->hint,
+					    begin, end);
 		break;
 	case VY_RUN_DELETED:
-		rc = vy_recovery_delete_run(index, def->run_id, begin, end);
+		rc = vy_recovery_delete_run(index, def->run_id,
+					    begin, end);
 		break;
 	case VY_RUN_RESERVED:
 	case VY_RUN_FAILED:

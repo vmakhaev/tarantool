@@ -27,8 +27,9 @@ vy_meta_create_from_tuple(struct vy_meta *def, struct tuple *tuple)
 	def->index_id = tuple_field_u32(tuple, 3);
 	def->index_lsn = tuple_field_uint(tuple, 4);
 	def->state = (enum vy_run_state)tuple_field_u32(tuple, 5);
-	def->begin = tuple_field_check(tuple, 6, MP_ARRAY);
-	def->end = tuple_field_check(tuple, 7, MP_ARRAY);
+	def->hint = (enum vy_meta_hint)tuple_field_u32(tuple, 6);
+	def->begin = tuple_field_check(tuple, 7, MP_ARRAY);
+	def->end = tuple_field_check(tuple, 8, MP_ARRAY);
 }
 
 /*
@@ -72,7 +73,8 @@ vy_meta_next_run_id(void)
 int
 vy_meta_insert_run(const char *begin, const char *end,
 		   const struct key_def *key_def,
-		   enum vy_run_state state, int64_t *p_run_id)
+		   enum vy_run_state state, enum vy_meta_hint hint,
+		   int64_t *p_run_id)
 {
 	char server_uuid_str[UUID_STR_LEN];
 	tt_uuid_to_string(&SERVER_UUID, server_uuid_str);
@@ -89,11 +91,11 @@ vy_meta_insert_run(const char *begin, const char *end,
 	if (end == NULL)
 		end = empty_key;
 
-	if (boxk(IPROTO_INSERT, BOX_VINYL_ID, "[%s%llu%u%u%llu%u%p%p]",
+	if (boxk(IPROTO_INSERT, BOX_VINYL_ID, "[%s%llu%u%u%llu%u%u%p%p]",
 		 server_uuid_str, (unsigned long long)run_id,
 		 (unsigned)key_def->space_id, (unsigned)key_def->iid,
 		 (unsigned long long)key_def->opts.lsn, (unsigned)state,
-		 begin, end) != 0)
+		 (unsigned)hint, begin, end) != 0)
 		return -1;
 
 	*p_run_id = run_id;

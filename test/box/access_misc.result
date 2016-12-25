@@ -616,7 +616,8 @@ box.space._space:select()
   - [328, 1, '_vinyl', 'memtx', 0, {}, [{'name': 'server_uuid', 'type': 'str'}, {
         'name': 'run_id', 'type': 'num'}, {'name': 'space_id', 'type': 'num'}, {'name': 'index_id',
         'type': 'num'}, {'name': 'index_lsn', 'type': 'num'}, {'name': 'state', 'type': 'num'},
-      {'name': 'begin', 'type': 'array'}, {'name': 'end', 'type': 'array'}]]
+      {'name': 'hint', 'type': 'num'}, {'name': 'begin', 'type': 'array'}, {'name': 'end',
+        'type': 'array'}]]
 ...
 box.space._func:select()
 ---
