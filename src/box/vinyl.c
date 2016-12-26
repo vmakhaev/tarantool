@@ -1771,17 +1771,6 @@ vy_range_tree_key_cmp(const struct vy_stmt *stmt, struct vy_range *range)
 }
 
 /*
- * Compare range->end with another range's begin.
- */
-static int
-vy_range_compare_end_with_begin(struct vy_range *range, struct vy_stmt *begin)
-{
-	if (range->end == NULL || begin == NULL)
-		return 1;
-	return vy_key_compare(range->end, begin, range->index->key_def);
-}
-
-/*
  * Extract MsgPack data from range->begin.
  * If range->begin is -inf (i.e. NULL), return NULL.
  */
@@ -6340,7 +6329,9 @@ vy_index_end_local_recovery(struct vy_index *index)
 		if (prev == NULL && range->begin != NULL)
 			goto run_missing;
 		if (prev != NULL &&
-		    vy_range_compare_end_with_begin(prev, range->begin) != 0)
+		    (prev->end == NULL || range->begin == NULL ||
+		     vy_key_compare(prev->end, range->begin,
+				    index->key_def) != 0))
 			goto run_missing;
 		if (range->mem_count == 0) {
 			/*
@@ -10049,7 +10040,8 @@ retry:
 	} else
 		part = NULL;
 	if (range == NULL ||
-	    vy_range_compare_end_with_begin(range, begin) <= 0) {
+	    (range->end != NULL && begin != NULL &&
+	     vy_key_compare(range->end, begin, index->key_def) <= 0)) {
 		/*
 		 * No range in the tree intersects the given run.
 		 * Create a new range for it.
