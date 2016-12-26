@@ -1,4 +1,3 @@
-local fun = require('fun')
 local log = require('log')
 
 local table_clear = require('table.clear')
