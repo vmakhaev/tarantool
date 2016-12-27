@@ -520,9 +520,11 @@ local function wrapper_cfg(cfg)
     local success, data = pcall(orig_cfg, cfg)
     if not success then
         write("Configuration failed: %s", data)
-        local log_type, log_args = logger_parse(cfg.logger)
-        if log_type == 'file' and fio.stat(log_args) then
-            os.execute('tail -n 10 ' .. log_args)
+        if type(cfg) ~= 'function' then
+            local log_type, log_args = logger_parse(cfg.logger)
+            if log_type == 'file' and fio.stat(log_args) then
+                os.execute('tail -n 10 ' .. log_args)
+            end
         end
         os.exit(1)
     end
@@ -555,7 +557,7 @@ local function start_check()
     local pid = tonumber(fh:read(64))
     fh:close()
 
-    if pid == nil or (ffi.C.kill(pid, 0) < 0 and errno() ~= errno.ESRCH) then
+    if pid == nil or (ffi.C.kill(pid, 0) < 0 and errno() == errno.ESRCH) then
         return nil
     end
     return pid
@@ -580,13 +582,16 @@ local function start()
     }
     shift_argv(arg, 0, 2)
     local success, data = pcall(dofile, instance_path)
-    -- if load fails - show last 10 lines of the log file
+    -- if load fails - show last 10 lines of the log file and exit
     if not success then
         write("Start failed: %s", data)
-        local log_type, log_args = logger_parse(cfg.logger)
-        if log_type == 'file' and fio.stat(log_args) then
-            os.execute('tail -n 10 ' .. log_args)
+        if type(box.cfg) ~= 'function' then
+            local log_type, log_args = logger_parse(box.cfg.logger)
+            if log_type == 'file' and fio.stat(log_args) then
+                os.execute('tail -n 10 ' .. log_args)
+            end
         end
+        os.exit(1)
     end
     return 0
 end
