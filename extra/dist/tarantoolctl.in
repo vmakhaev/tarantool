@@ -697,7 +697,61 @@ local function enter()
     return 0
 end
 
+local function stdin_is_pipe()
+    local status = ffi.C.isatty(0)
+    if status == 0 then
+        -- EINVAL is linux errno for not a tty
+        -- ENOTTY is a POSIX.1 errno for not a tty
+        return (errno() == errno.EINVAL or errno() == errno.ENOTTY)
+    end
+    return false
+end
+
+local function read_from_stdin()
+    local code = io.stdin:read("*a")
+    if not loadstring(code) then
+        write("Error, while checking syntax of stdin: halting")
+        return nil
+    end
+    return code
+end
+
+local function execute_remote(socket_uri, code)
+    local u = uri.parse(socket_uri)
+    local remote = netbox.connect(u.host, u.service, {
+        user = u.login,
+        password = u.password,
+        console = true
+    })
+    if remote == nil then
+        return false, nil
+    end
+    return true, remote:eval(code)
+end
+
 local function connect()
+    -- If we're reading from stdin, then everything is OK
+    if stdin_is_pipe() then
+        local code = read_from_stdin()
+        if code == nil then
+            usage(command_name)
+            return 1
+        end
+        local status, full_response = execute_remote(arg[2], code)
+        if status == false then
+            write("failed to connect to tarantool")
+            return 2
+        end
+        local error_response = yaml.decode(full_response)[1]
+        if type(error_response) == 'table' and error_response.error then
+            write("Error, while executing remote command:")
+            write(error_response.error)
+            return 3
+        end
+        print(full_response)
+        return 0
+    end
+    -- Otherwise we're starting console
     console.on_start(function(self)
         local status, reason
         status, reason = pcall(function() require('console').connect(arg[2]) end)
@@ -747,22 +801,13 @@ end
 local function eval()
     local console_sock_path = uri.parse(console_sock).service
     local filename = arg[3]
-    local stdin_is_file = (ffi.C.isatty(0) == 0 and
-                           (errno() == errno.EINVAL or errno() == errno.ENOTTY))
+    local is_pipe = stdin_is_pipe()
     local code = nil
-    if filename == nil then
-        if not stdin_is_file then
-            write("Usage:")
-            write(" - tarantoolctl eval instance_name file.lua")
-            write(" - <command> | tarantoolctl eval instance_name")
-            return 1
-        end
-        code = io.stdin:read("*a")
-        if not loadstring(code) then
-            write("Error, while checking syntax: halting")
-            return 1
-        end
-    else
+
+    if filename == nil and stdin_is_pipe() == false then
+        usage(command_name)
+        return 1
+    elseif filename ~= nil then
         if fio.stat(filename) == nil and errno() == errno.ENOENT then
             write("%s: file not found", filename)
             return 1
@@ -772,6 +817,12 @@ local function eval()
             return 1
         end
         code = read_file(filename)
+    else
+        code = read_from_stdin()
+        if code == nil then
+            usage(command_name)
+            return 1
+        end
     end
 
     assert(code ~= nil, "Check that we've successfully loaded file")
@@ -782,15 +833,11 @@ local function eval()
         return 2
     end
 
-    local u = uri.parse(console_sock)
-    local remote = netbox.connect(u.host, u.service,
-        { user = u.login, password = u.password, console = true })
-    if remote == nil then
+    local status, full_response = execute_remote(console_sock, code)
+    if status == false then
         write("control socket exists, but tarantool doesn't listen on it")
         return 2
     end
-
-    local full_response = remote:eval(code)
     local error_response = yaml.decode(full_response)[1]
     if type(error_response) == 'table' and error_response.error then
         write("Error, while reloading config:")
