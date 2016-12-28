@@ -157,6 +157,15 @@ public:
 	 */
 	virtual void abortCheckpoint();
 
+	/**
+	 * Create a new tuple format from the list of key_defs.
+	 * @param key_list List of key_defs.
+	 * @retval not NULL Success.
+	 * @retval     NULL Memory error.
+	 */
+	virtual struct tuple_format *
+	buildTupleFormat(struct rlist *key_list) = 0;
+
 public:
 	/** Name of the engine. */
 	const char *name;

@@ -1,5 +1,5 @@
-#ifndef TARANTOOL_BOX_SYSVIEW_ENGINE_H_INCLUDED
-#define TARANTOOL_BOX_SYSVIEW_ENGINE_H_INCLUDED
+#ifndef INCLUDES_TARANTOOL_BOX_MEMTX_TUPLE_H
+#define INCLUDES_TARANTOOL_BOX_MEMTX_TUPLE_H
 /*
  * Copyright 2010-2016, Tarantool AUTHORS, please see AUTHORS file.
  *
@@ -16,11 +16,11 @@
  *    disclaimer in the documentation and/or other materials
  *    provided with the distribution.
  *
- * THIS SOFTWARE IS PROVIDED BY <COPYRIGHT HOLDER> ``AS IS'' AND
+ * THIS SOFTWARE IS PROVIDED BY AUTHORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
- * <COPYRIGHT HOLDER> OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+ * AUTHORS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
  * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
  * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
@@ -30,17 +30,43 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-#include "engine.h"
 
-struct SysviewEngine: public Engine {
-public:
-	SysviewEngine();
-	virtual Handler *open() override;
-	virtual void buildSecondaryKey(struct space *old_space,
-				       struct space *new_space,
-				       Index *new_index) override;
-	virtual struct tuple_format *
-	buildTupleFormat(struct rlist *key_list) override;
-};
+#include "diag.h"
+#include "tuple_format.h"
 
-#endif /* TARANTOOL_BOX_SYSVIEW_ENGINE_H_INCLUDED */
+/**
+ * Create a new tuple format for a memtx space from the list of
+ * key_defs.
+ * @param key_list List of key_defs.
+ * @retval not NULL Success.
+ * @retval     NULL Memory error.
+ */
+struct tuple_format *
+memtx_tuple_format_new(struct rlist *key_list);
+
+/** Create a tuple in the memtx engine format. @sa tuple_new(). */
+struct tuple *
+memtx_tuple_new(struct tuple_format *format, const char *data, const char *end);
+
+/**
+ * Create a tuple in the memtx engine format. Throw an exception
+ * if an error occured. @sa memtx_tuple_new().
+ */
+static inline struct tuple *
+memtx_tuple_new_xc(struct tuple_format *format, const char *data,
+		   const char *end)
+{
+	struct tuple *res = memtx_tuple_new(format, data, end);
+	if (res == NULL)
+		diag_raise();
+	return res;
+}
+
+/**
+ * Free the tuple of a memtx space.
+ * @pre tuple->refs  == 0
+ */
+void
+memtx_tuple_delete(struct tuple_format *format, struct tuple *tuple);
+
+#endif

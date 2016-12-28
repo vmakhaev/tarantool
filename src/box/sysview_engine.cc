@@ -121,3 +121,12 @@ Handler *SysviewEngine::open()
 void
 SysviewEngine::buildSecondaryKey(struct space *, struct space *, Index *)
 {}
+
+extern struct tuple_format *
+memtx_tuple_format_new(struct rlist *key_list);
+
+struct tuple_format *
+SysviewEngine::buildTupleFormat(struct rlist *key_list)
+{
+	return memtx_tuple_format_new(key_list);
+}

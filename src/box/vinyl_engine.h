@@ -58,6 +58,8 @@ struct VinylEngine: public Engine {
 	virtual void join(struct xstream *stream) override;
 	virtual int beginCheckpoint() override;
 	virtual int waitCheckpoint(struct vclock *vclock) override;
+	virtual struct tuple_format *
+	buildTupleFormat(struct rlist *key_list) override;
 public:
 	struct vy_env *env;
 	bool recovery_complete;

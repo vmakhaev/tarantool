@@ -38,6 +38,7 @@
 #include "memtx_tree.h"
 #include "memtx_rtree.h"
 #include "memtx_bitset.h"
+#include "memtx_tuple.h"
 #include "port.h"
 
 /**

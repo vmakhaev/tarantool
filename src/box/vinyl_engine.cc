@@ -48,6 +48,7 @@
 #include "schema.h"
 #include "iproto_constants.h"
 #include "vinyl.h"
+#include "vy_stmt.h"
 
 /* Used by lua/info.c */
 extern "C" struct vy_env *
@@ -322,4 +323,10 @@ int
 VinylEngine::waitCheckpoint(struct vclock* vclock)
 {
 	return vy_wait_checkpoint(env, vclock);
+}
+
+struct tuple_format *
+VinylEngine::buildTupleFormat(struct rlist *key_list)
+{
+	return vy_tuple_format_new(key_list);
 }

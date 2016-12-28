@@ -48,7 +48,7 @@ enum { FORMAT_REF_MAX = INT32_MAX};
  */
 enum { TUPLE_INDEX_BASE = 1 };
 
-enum engine_type { ENGINE_NIL = 1, ENGINE_MEMTX = 1, ENGINE_VINYL = 2 };
+enum engine_type { ENGINE_NIL = 0, ENGINE_MEMTX = 1, ENGINE_VINYL = 2 };
 
 /**
  * @brief Tuple field format
@@ -170,7 +170,7 @@ tuple_format_ref(struct tuple_format *format, int count)
  * @retval     NULL Memory error.
  */
 struct tuple_format *
-tuple_format_new(struct rlist *key_list, enum engine_type engine);
+tuple_format_new(struct rlist *key_list);
 
 /**
  * Fill the field map of tuple with field offsets.

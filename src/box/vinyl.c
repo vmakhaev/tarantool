@@ -5407,7 +5407,7 @@ vy_index_new(struct vy_env *e, struct key_def *user_key_def,
 	rlist_create(&key_list);
 	rlist_add_entry(&key_list, key_def, link);
 
-	struct tuple_format *format = tuple_format_new(&key_list, ENGINE_VINYL);
+	struct tuple_format *format = vy_tuple_format_new(&key_list);
 	assert(format != NULL);
 	tuple_format_ref(format, 1);
 

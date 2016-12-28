@@ -30,6 +30,7 @@
  */
 #include "memtx_engine.h"
 #include "memtx_space.h"
+#include "memtx_tuple.h"
 
 #include "coeio_file.h"
 #include "scoped_guard.h"
@@ -1036,6 +1037,12 @@ MemtxEngine::join(struct xstream *stream)
 	cord_costart(&cord, "initial_join", memtx_initial_join_f, &arg);
 	if (cord_cojoin(&cord) != 0)
 		diag_raise();
+}
+
+struct tuple_format *
+MemtxEngine::buildTupleFormat(struct rlist *key_list)
+{
+	return memtx_tuple_format_new(key_list);
 }
 
 /**

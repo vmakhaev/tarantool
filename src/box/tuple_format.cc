@@ -157,32 +157,25 @@ tuple_format_delete(struct tuple_format *format)
 	free(format);
 }
 
-extern "C" void
+extern void
 memtx_tuple_delete(struct tuple_format *format, struct tuple *tuple);
 
 extern "C" void
-vinyl_tuple_delete(struct tuple_format *format, struct tuple *tuple);
+vy_tuple_delete(struct tuple_format *format, struct tuple *tuple);
 
-extern "C" struct tuple *
+extern struct tuple *
 memtx_tuple_new(struct tuple_format *format, const char *data, const char *end);
 
 extern "C" struct tuple *
-vinyl_tuple_new(struct tuple_format *format, const char *data, const char *end);
+vy_tuple_new(struct tuple_format *format, const char *data, const char *end);
 
 struct tuple_format *
-tuple_format_new(struct rlist *key_list, enum engine_type engine)
+tuple_format_new(struct rlist *key_list)
 {
 	struct tuple_format *format = tuple_format_alloc(key_list);
 	if (format == NULL)
 		return NULL;
-	format->engine = engine;
-	if (engine == ENGINE_MEMTX) {
-		format->tuple_delete = memtx_tuple_delete;
-		format->tuple_new = memtx_tuple_new;
-	} else {
-		format->tuple_delete = vinyl_tuple_delete;
-		format->tuple_new = vinyl_tuple_new;
-	}
+	format->engine = ENGINE_NIL;
 	if (tuple_format_register(format) < 0) {
 		tuple_format_delete(format);
 		return NULL;
@@ -191,6 +184,8 @@ tuple_format_new(struct rlist *key_list, enum engine_type engine)
 		tuple_format_delete(format);
 		return NULL;
 	}
+	format->tuple_delete = NULL;
+	format->tuple_new = NULL;
 
 	/* Set up offset slots */
 	if (format->field_count == 0) {
@@ -266,11 +261,14 @@ tuple_init_field_map(const struct tuple_format *format, uint32_t *field_map,
 	return 0;
 }
 
+extern struct tuple_format *
+memtx_tuple_format_new(struct rlist *key_list);
+
 void
 tuple_format_init()
 {
 	RLIST_HEAD(empty_list);
-	tuple_format_default = tuple_format_new(&empty_list, ENGINE_MEMTX);
+	tuple_format_default = memtx_tuple_format_new(&empty_list);
 	if (tuple_format_default == NULL)
 		diag_raise();
 	/* Make sure this one stays around. */

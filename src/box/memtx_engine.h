@@ -110,6 +110,9 @@ struct MemtxEngine: public Engine {
 	 */
 	int64_t lastCheckpoint(struct vclock *vclock);
 	void recoverSnapshot();
+
+	virtual struct tuple_format *
+	buildTupleFormat(struct rlist *key_list) override;
 private:
 	void
 	recoverSnapshotRow(struct xrow_header *row);
