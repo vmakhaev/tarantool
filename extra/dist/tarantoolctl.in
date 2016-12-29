@@ -274,14 +274,14 @@ local function load_default_file(default_file)
         local user_data = ffi.C.getpwnam(ffi.cast('const char*', d.username))
         if user_data == nil then
             write('Unknown user: %s', d.username)
-            os.exit(-1)
+            os.exit(1)
         end
 
         -- get group data
         local group = ffi.C.getgrgid(user_data.pw_gid)
         if group == nil then
             write('Group lookup by gid failed: %d', user_data.pw_gid)
-            os.exit(-1)
+            os.exit(1)
         end
         group_name = ffi.string(group.gr_name)
     end
@@ -289,13 +289,13 @@ local function load_default_file(default_file)
     if instance_dir == nil then
         write('Instance directory (instance_dir) is not set in %s',
               default_file)
-        os.exit(-1)
+        os.exit(1)
     end
 
     if not fio.stat(instance_dir) then
         write('Instance directory %s does not exist',
               instance_dir)
-        os.exit(-1)
+        os.exit(1)
     end
 end
 
@@ -322,7 +322,7 @@ local function mkdir(dirname)
     write("Directory '%s' is created", dirname)
     if not fio.mkdir(dirname, tonumber('0750', 8)) then
         write("Can't mkdir %s: %s", dirname, errno.strerror())
-        os.exit(-1)
+        os.exit(1)
     end
 
     if not usermode and
@@ -605,7 +605,7 @@ local function stop()
         local f = fio.open(pid_file, 'O_RDONLY')
         if f == nil then
             write("Can't read pid file %s: %s", pid_file, errno.strerror())
-            return -1
+            return 1
         end
 
         local pid = tonumber(f:read(64))
@@ -613,12 +613,12 @@ local function stop()
 
         if pid == nil or pid <= 0 then
             write("Broken pid file %s", pid_file)
-            return -1
+            return 1
         end
 
         if ffi.C.kill(pid, 15) < 0 then
             write("Can't kill process %d: %s", pid, errno.strerror())
-            return -1
+            return 1
         end
 
         fio.unlink(pid_file)
@@ -686,7 +686,7 @@ local function enter()
             write("Please add $USER to group '%s': usermod -a -G %s $USER",
                   group_name, group_name)
         end
-        return -1
+        return 1
     end
 
     local cmd = string.format("require('console').connect('%s')", console_sock)
@@ -944,8 +944,8 @@ local function process_local(cmd_function)
     instance_path = fio.pathjoin(instance_dir, instance_name .. '.lua')
 
     if not fio.stat(instance_path) then
-        write('Instance %s is not found in %s', instance_name, instance_dir)
-        os.exit(-1)
+        write('Instance "%s" is not found in %s', instance_name, instance_dir)
+        os.exit(1)
     end
 
     -- create a path to the control socket (admin console)
@@ -1050,7 +1050,10 @@ local commands = setmetatable({
         }
     }, connect = {
         func = exit_wrapper(connect), process = process_remote, help = {
-            header = "%s connect <instance_uri>",
+            header = {
+                "%s connect <instance_uri> # interactive console version",
+                "<command> | %s connect <instance_uri> # pipe version"
+            },
             description =
 [=[
         Connect to Tarantool instance on admin/console port.

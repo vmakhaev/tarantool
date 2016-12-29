@@ -57,7 +57,7 @@ local function run_command(dir, command)
     local res = os.execute(line)
     local fstdout_e, fstderr_e = io.open(fstdout):read('*a'), io.open(fstderr):read('*a')
     fio.unlink(fstdout); fio.unlink(fstderr);
-    return res, fstdout_e, fstderr_e
+    return res/256, fstdout_e, fstderr_e
 end
 
 local function tctl_command(dir, cmd, args)
@@ -73,15 +73,15 @@ local function check_ok(test, dir, cmd, args, e_res, e_stdout, e_stderr)
     local res, stdout, stderr = tctl_command(dir, cmd, args)
     stdout, stderr = stdout or '', stderr or ''
     if (e_res ~= nil) then
-        test:is(res, e_res, ("check '%s' command status"):format(cmd))
+        test:is(res, e_res, ("check '%s' command status for '%s'"):format(cmd,args))
     end
     if e_stdout ~= nil then
-        if not test:ok(stdout:find(e_stdout), ("check '%s' stdout"):format(cmd)) then
+        if not test:ok(stdout:find(e_stdout), ("check '%s' stdout for '%s'"):format(cmd,args)) then
             print(("Expected to find '%s' in '%s'"):format(e_stdout, stdout))
         end
     end
     if e_stderr ~= nil then
-        if not test:ok(stderr:find(e_stderr), ("check '%s' stderr"):format(cmd)) then
+        if not test:ok(stderr:find(e_stderr), ("check '%s' stderr for '%s'"):format(cmd,args)) then
             print(("Expected to find '%s' in '%s'"):format(e_stderr, stderr))
         end
     end
@@ -100,14 +100,14 @@ do
     local status, err = pcall(function()
         test:test("basic test", function(test_i)
             test_i:plan(16)
-            check_ok(test_i, dir, 'start',  'script', 0,   nil, "Starting instance")
-            check_ok(test_i, dir, 'status', 'script', 0,   nil, "is running")
-            check_ok(test_i, dir, 'start',  'script', 256, nil, "is already running")
-            check_ok(test_i, dir, 'status', 'script', 0,   nil, "is running")
-            check_ok(test_i, dir, 'stop',   'script', 0,   nil, "Stopping")
-            check_ok(test_i, dir, 'status', 'script', 256, nil, "is stopped")
-            check_ok(test_i, dir, 'stop',   'script', 0,   nil, "is not running")
-            check_ok(test_i, dir, 'status', 'script', 256, nil, "is stopped" )
+            check_ok(test_i, dir, 'start',  'script', 0, nil, "Starting instance")
+            check_ok(test_i, dir, 'status', 'script', 0, nil, "is running")
+            check_ok(test_i, dir, 'start',  'script', 0, nil, "is already running")
+            check_ok(test_i, dir, 'status', 'script', 0, nil, "is running")
+            check_ok(test_i, dir, 'stop',   'script', 0, nil, "Stopping")
+            check_ok(test_i, dir, 'status', 'script', 1, nil, "is stopped")
+            check_ok(test_i, dir, 'stop',   'script', 0, nil, "is not running")
+            check_ok(test_i, dir, 'status', 'script', 1, nil, "is stopped" )
         end)
     end)
 
@@ -132,13 +132,13 @@ do
     local status, err = pcall(function()
         test:test("basic test for bad script", function(test_i)
             test_i:plan(8)
-            check_ok(test_i, dir, 'start', 'script', 65280, nil,
-                     'Instance script is not found')
-            check_ok(test_i, dir, 'start', 'bad_script',  0, nil,
+            check_ok(test_i, dir, 'start', 'script', 1, nil,
+                     'Instance "script" is not found')
+            check_ok(test_i, dir, 'start', 'bad_script', 1, nil,
                      'unexpected symbol near')
             check_ok(test_i, dir, 'start', 'good_script', 0)
-            check_ok(test_i, dir, 'eval',  'good_script bad_script.lua', 256,
-                     nil, 'Failed to check instance file')
+            check_ok(test_i, dir, 'eval',  'good_script bad_script.lua', 3,
+                     nil, 'Error, while reloading config:')
             check_ok(test_i, dir, 'stop', 'good_script', 0)
         end)
     end)
@@ -167,8 +167,8 @@ do
         test:test("check answers in case of call", function(test_i)
             test_i:plan(6)
             check_ok(test_i, dir, 'start', 'good_script', 0)
-            check_ok(test_i, dir, 'eval',  'good_script bad_script.lua', 768,
-                     nil, 'Error, while reloading config')
+            check_ok(test_i, dir, 'eval',  'good_script bad_script.lua', 3, nil,
+                     'Error, while reloading config')
             check_ok(test_i, dir, 'eval',  'good_script ok_script.lua', 0,
                      '---\n- 1\n...', nil)
             check_ok(test_i, dir, 'stop', 'good_script', 0)
